@@ -1,44 +1,125 @@
+<div align="center">
+
 # athena
 
-A Rust CLI that manages AI agent **skills** and **plugins** like pinned dependencies. Declare what you want in a TOML file; athena fetches each Git source once into a shared cache, locks it to an exact commit, and copies its files into place. It never overwrites files you have edited unless you ask it to.
+**A package manager for AI agent skills and plugins.**
+
+Pin them to exact commits, install them anywhere, and never lose a local edit.
+
+[![crates.io](https://img.shields.io/crates/v/athena-ai-manager.svg)](https://crates.io/crates/athena-ai-manager)
+[![downloads](https://img.shields.io/crates/d/athena-ai-manager.svg)](https://crates.io/crates/athena-ai-manager)
+[![license](https://img.shields.io/crates/l/athena-ai-manager.svg)](LICENSE)
+[![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev)
+[![release](https://github.com/BaankeyBihari/athena/actions/workflows/generator-generic-ossf-slsa3-publish.yml/badge.svg)](https://github.com/BaankeyBihari/athena/actions/workflows/generator-generic-ossf-slsa3-publish.yml)
+
+</div>
+
+---
+
+## Contents
+
+- [Why athena](#why-athena)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Scopes](#scopes)
+- [Commands](#commands)
+- [Configuration](#configuration)
+- [Safety rules](#safety-rules)
+- [Contributing](#contributing)
+
+## Why athena
+
+AI skills and plugins live in Git repositories, and most people copy them into their agent directories by hand. That leaves no record of where a skill came from or which version it is, and updating means overwriting whatever you changed.
+
+athena treats them like dependencies:
+
+- **Declared.** A small `athena.toml` lists every skill and plugin, per project or globally.
+- **Reproducible.** Each entry is locked to a commit SHA. `athena sync` on a fresh checkout installs exactly the same files.
+- **Safe.** athena records a hash of what it installed and refuses to overwrite anything you have modified, unless you pass `--force`.
+- **Efficient.** Each repository is fetched once into a shared cache; installs are plain file copies with no nested `.git` directories.
+- **Scriptable.** `--json` output and strict exit codes for agents and CI.
 
 ## Install
 
-Requires `git` on `PATH`. The crate is `athena-ai-manager`; the command it installs is `athena`.
+athena needs `git` on your `PATH`. The crate is named `athena-ai-manager`; the command it installs is `athena`.
+
+**With Cargo**
 
 ```sh
 cargo install athena-ai-manager
 ```
 
-From a checkout (the project uses [mise](https://mise.jdx.dev) to pin the Rust toolchain):
+**Prebuilt binaries** for Linux (x86_64) and macOS (Apple Silicon) are attached to every [release](https://github.com/BaankeyBihari/athena/releases/latest):
 
 ```sh
-mise install          # installs the pinned Rust toolchain
+curl -LO https://github.com/BaankeyBihari/athena/releases/latest/download/athena-aarch64-apple-darwin.tar.gz
+tar -xzf athena-aarch64-apple-darwin.tar.gz
+sudo mv athena /usr/local/bin/
+```
+
+Each release also carries signed [SLSA level 3](https://slsa.dev) provenance. To confirm a binary was built from this repository by its release workflow, check it with [slsa-verifier](https://github.com/slsa-framework/slsa-verifier):
+
+```sh
+curl -LO https://github.com/BaankeyBihari/athena/releases/latest/download/multiple.intoto.jsonl
+slsa-verifier verify-artifact athena-aarch64-apple-darwin.tar.gz \
+  --provenance-path multiple.intoto.jsonl \
+  --source-uri github.com/BaankeyBihari/athena
+```
+
+**From source** (the project pins its Rust toolchain with [mise](https://mise.jdx.dev)):
+
+```sh
+git clone https://github.com/BaankeyBihari/athena.git && cd athena
+mise install
 cargo install --path .
 ```
 
 ## Quick start
 
-```sh
-# Add a skill from GitHub (locked to the current HEAD commit)
-athena add github.com:obra/superpowers
+```console
+$ athena add github.com:obra/superpowers
+added `obra/superpowers` at `/private/tmp/my-project/.agents/skills/superpowers`
 
-# Add a plugin from a subfolder of a monorepo, following the `main` branch
+$ athena list
++------------------+-------+--------+--------------+----------------------------------------------------+-----------------------------------------+
+| Name             | Kind  | Type   | Commit       | Path                                               | Source                                  |
++=================================================================================================================================================+
+| obra/superpowers | skill | remote | bb92a7774141 | /private/tmp/my-project/.agents/skills/superpowers | https://github.com/obra/superpowers.git |
++------------------+-------+--------+--------------+----------------------------------------------------+-----------------------------------------+
+
+$ echo '# my tweak' >> .agents/skills/superpowers/README.md
+$ athena sync
+obra/superpowers: skipped: local modifications in `/private/tmp/my-project/.agents/skills/superpowers`
+```
+
+`athena add` wrote this to `athena.toml`. Commit it, and anyone who runs `athena sync` gets the same files:
+
+```toml
+[skills."obra/superpowers"]
+type = "remote"
+source = "https://github.com/obra/superpowers.git"
+commit = "bb92a77741419a4ab5f06e711a283343f1ada0c3"
+hash = "sha256:47ad77cb7e6d88302451b6822152aff8c1c395755d7f86d4a51724b0cc700c58"
+```
+
+More things to try:
+
+```sh
+# A plugin from one folder of a monorepo, following the `main` branch
 athena add 'https://github.com/modelcontextprotocol/servers.git#main:/src/postgres' --plugin --name mcp-postgres
 
-# Add a local directory
+# A local directory
 athena add ./my-plugins/linter --plugin
-
-# See what is installed
-athena list
-athena show '*linter' --json
-
-# On another machine or a fresh checkout: install everything at its locked commit
-athena sync
 
 # Move entries to the latest commit of what they follow
 athena update obra/superpowers
 athena update --all
+
+# Keep one entry where it is when running `update --all`
+athena pin mcp-postgres
+
+# Details, as JSON for agents
+athena show '*postgres' --json
 ```
 
 ## Scopes
@@ -113,7 +194,11 @@ athena edits this file in place and keeps your comments and formatting.
 - **Local never writes over global.** If a local entry overlaps a path managed by the global config, local `add`, `sync`, and `update` stop and tell you to remove one side (`athena remove <name>` or `athena remove -g <name>`).
 - **Gobbling.** Adding an entry whose path contains existing entries asks `Gobble … into …? [y/N]` and replaces them on `y`. It is refused without a terminal, or when any of those entries (or the parent folder) holds your own changes.
 
-## Development
+athena never runs the files it installs, but the agents that load them will. Only add sources you trust, and review an `athena.toml` from an untrusted repository before running `athena sync`. See [SECURITY.md](SECURITY.md) for the full security model and how to report a vulnerability.
+
+## Contributing
+
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the design-to-code workflow, and what a pull request needs.
 
 ```sh
 mise run test    # cargo test
@@ -121,4 +206,8 @@ mise run lint    # cargo clippy --all-targets -- -D warnings
 mise run fmt     # cargo fmt
 ```
 
-Design and requirements live in [`docs/`](docs/high-level-design.md). The project follows linked-intent development: each behavior has an EARS spec under `docs/intent/<component>/`, and tests and code carry `@spec` tags pointing at those IDs.
+The design lives in [`docs/`](docs/high-level-design.md): a high-level design, one design doc per component, and EARS specs that tests and code cite with `@spec` tags.
+
+## License
+
+[MIT](LICENSE)
