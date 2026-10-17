@@ -1504,6 +1504,8 @@ fn gobbled_children_survive_a_failed_parent_export() {
 }
 
 // @spec CMD-ADD-007
+// macOS only: Linux has no unprivileged immutable flag to make the install fail.
+#[cfg(target_os = "macos")]
 #[test]
 fn a_failure_mid_install_records_what_was_installed() {
     let sb = Sandbox::new();
