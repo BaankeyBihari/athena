@@ -77,34 +77,61 @@ cargo install --path .
 ## Quick start
 
 ```console
-$ athena add github.com:obra/superpowers
-added `obra/superpowers` at `/private/tmp/my-project/.agents/skills/superpowers`
+$ athena add 'github.com:jszmajda/lid#main:/plugins/*/skills/{linked-intent-dev,map-codebase}'
+added `map-codebase` at `/private/tmp/my-project/.agents/skills/map-codebase`
+added `linked-intent-dev` at `/private/tmp/my-project/.agents/skills/linked-intent-dev`
 
 $ athena list
-+------------------+-------+--------+--------------+----------------------------------------------------+-----------------------------------------+
-| Name             | Kind  | Type   | Commit       | Path                                               | Source                                  |
-+=================================================================================================================================================+
-| obra/superpowers | skill | remote | bb92a7774141 | /private/tmp/my-project/.agents/skills/superpowers | https://github.com/obra/superpowers.git |
-+------------------+-------+--------+--------------+----------------------------------------------------+-----------------------------------------+
++-------------------+-------+--------+--------------+----------------------------------------------------------+-------------------------------------+
+| Name              | Kind  | Type   | Commit       | Path                                                     | Source                              |
++====================================================================================================================================================+
+| map-codebase      | skill | remote | 9679360f382b | /private/tmp/my-project/.agents/skills/map-codebase      | https://github.com/jszmajda/lid.git |
+|-------------------+-------+--------+--------------+----------------------------------------------------------+-------------------------------------|
+| linked-intent-dev | skill | remote | 9679360f382b | /private/tmp/my-project/.agents/skills/linked-intent-dev | https://github.com/jszmajda/lid.git |
++-------------------+-------+--------+--------------+----------------------------------------------------------+-------------------------------------+
 
-$ echo '# my tweak' >> .agents/skills/superpowers/README.md
+$ echo '# my tweak' >> .agents/skills/map-codebase/SKILL.md
 $ athena sync
-obra/superpowers: skipped: local modifications in `/private/tmp/my-project/.agents/skills/superpowers`
+map-codebase: skipped: local modifications in `/private/tmp/my-project/.agents/skills/map-codebase`
+linked-intent-dev: up to date
 ```
 
-`athena add` wrote this to `athena.toml`. Commit it, and anyone who runs `athena sync` gets the same files:
+One `add` with a pattern installed two skills from different folders of the repository. `athena add` wrote them to `athena.toml`; commit it, and anyone who runs `athena sync` gets the same files:
 
 ```toml
-[skills."obra/superpowers"]
+[skills.map-codebase]
 type = "remote"
-source = "https://github.com/obra/superpowers.git"
-commit = "bb92a77741419a4ab5f06e711a283343f1ada0c3"
-hash = "sha256:47ad77cb7e6d88302451b6822152aff8c1c395755d7f86d4a51724b0cc700c58"
+source = "https://github.com/jszmajda/lid.git"
+commit = "9679360f382b5c265da073c4e06badd3afcca7d0"
+ref = "main"
+subpath = "plugins/arrow-maintenance/skills/map-codebase"
+hash = "sha256:0982b15ec0d9a2fd6210f78ec4e72670f9cae0ca172169aabc630cb96fc678ae"
+
+[skills.linked-intent-dev]
+type = "remote"
+source = "https://github.com/jszmajda/lid.git"
+commit = "9679360f382b5c265da073c4e06badd3afcca7d0"
+ref = "main"
+subpath = "plugins/linked-intent-dev/skills/linked-intent-dev"
+hash = "sha256:af6a79de370e429d7884ed22a20d376425a32db1fa64ce810040560d10fcb14c"
+```
+
+Mistakes fail before anything is installed, and say how to fix them:
+
+```console
+$ athena add github.com:obra/superpowers
+ERROR no `SKILL.md` at the root of `obra/superpowers`; it looks like a collection of skills, so add them with `github.com:obra/superpowers#:/skills/*`; pass `--no-skill-check` to install as they are
+
+$ athena add 'github.com:jszmajda/lid#main:/plugins/*/skills/{linked-intent-dev,map-codeabse}'
+ERROR no folder matches `plugins/*/skills/map-codeabse`
 ```
 
 More things to try:
 
 ```sh
+# Every skill in a collection; re-run it later to pick up new ones
+athena add 'github.com:obra/superpowers#:/skills/*'
+
 # A plugin from one folder of a monorepo, following the `main` branch
 athena add 'https://github.com/modelcontextprotocol/servers.git#main:/src/postgres' --plugin --name mcp-postgres
 
@@ -112,7 +139,7 @@ athena add 'https://github.com/modelcontextprotocol/servers.git#main:/src/postgr
 athena add ./my-plugins/linter --plugin
 
 # Move entries to the latest commit of what they follow
-athena update obra/superpowers
+athena update map-codebase
 athena update --all
 
 # Keep one entry where it is when running `update --all`
@@ -137,7 +164,7 @@ Remote repositories are cached in `$XDG_CACHE_HOME/athena/remotes/` (default `~/
 
 | Command | What it does |
 |---|---|
-| `add <source> [--name N] [--path P] [--plugin] [--pin] [-g] [--force]` | Creates a new entry, installs it, and records it. `--global` requires `--path`. |
+| `add <source> [--name N] [--path P] [--plugin] [--pin] [--no-skill-check] [-g] [--force]` | Creates new entries, installs them, and records them, all or nothing. A pattern source creates one entry per matched folder. Skills must have a `SKILL.md` at their root unless `--no-skill-check` is given. `--global` requires `--path`. |
 | `sync [-g] [--force]` | Restores every entry to its locked commit. Never moves a commit. |
 | `update (<name> \| -a/--all) [-g] [--force]` | Refreshes entries to the latest commit of their `ref` (default `HEAD`), then installs them. `--all` syncs pinned entries without refreshing them. |
 | `pin <name> [-g]` / `unpin <name> [-g]` | Excludes an entry from `update --all` refreshes, or includes it again. |
@@ -155,7 +182,8 @@ Remote repositories are cached in `$XDG_CACHE_HOME/athena/remotes/` (default `~/
 | `git@github.com:org/repo.git`, `https://…`, `ssh://…` | Used as given |
 | `/abs/path`, `./rel`, `../rel`, `~/path`, `file://…` | Local directory, copied on each `sync` |
 | `<source>#<ref>` | Branch, tag, or full commit SHA |
-| `<source>#<ref>:/sub/path` or `<source>#:/sub/path` | Install only that subfolder |
+| `<source>#<ref>:/sub/path`, `<source>#:/sub/path`, or `<source>#/sub/path` | Install only that subfolder (the last two use the default branch) |
+| `<source>#<ref>:/skills/*` | One entry per matching folder. `*` and `?` match within one path component and skip hidden folders; `{a,b}` picks alternatives. With a pattern, `--path` is the parent folder for every entry. |
 
 ## Configuration
 
@@ -164,9 +192,10 @@ Remote repositories are cached in `$XDG_CACHE_HOME/athena/remotes/` (default `~/
 default_skill_path = "./.agents/skills"
 default_plugin_path = "./.agents/plugins"
 
-[skills."obra/superpowers"]
+[skills.brainstorming]
 type = "remote"
 source = "https://github.com/obra/superpowers.git"
+subpath = "skills/brainstorming"
 commit = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0"   # locked commit
 hash = "sha256:…"                                    # written by athena
 
@@ -192,6 +221,7 @@ athena edits this file in place and keeps your comments and formatting.
 - **Modified files are never overwritten silently.** athena records a content hash of what it installed. If the files on disk no longer match, `sync`, `update`, and `remove` skip or refuse that entry unless you pass `--force`. For an entry without a recorded hash, files that git tracks unmodified count as safe to replace; untracked and git-ignored files do not.
 - **One owner per path.** Two entries installing different versions to the same path, or one entry nested inside another, block `add`, `sync`, and `update` until you fix the config. `remove` always works, so you can resolve it.
 - **Local never writes over global.** If a local entry overlaps a path managed by the global config, local `add`, `sync`, and `update` stop and tell you to remove one side (`athena remove <name>` or `athena remove -g <name>`).
+- **Skills are checked.** `add` refuses a skill folder without a `SKILL.md` at its root, so a wrong repository or subpath fails instead of installing files no agent loads. For a collection, it suggests the exact pattern to use.
 - **Gobbling.** Adding an entry whose path contains existing entries asks `Gobble … into …? [y/N]` and replaces them on `y`. It is refused without a terminal, or when any of those entries (or the parent folder) holds your own changes.
 
 athena never runs the files it installs, but the agents that load them will. Only add sources you trust, and review an `athena.toml` from an untrusted repository before running `athena sync`. See [SECURITY.md](SECURITY.md) for the full security model and how to report a vulnerability.

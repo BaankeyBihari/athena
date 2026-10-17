@@ -32,7 +32,7 @@ Design: `install-design.md`
 
 ## Gobbling
 
-- [x] **INST-GOB-001**: When `add` introduces an entry whose resolved path is an ancestor of one or more existing entries' resolved paths in the same scope, the system shall require gobbling those child entries before installing.
+- [x] **INST-GOB-001**: When a single-entry `add` (a source without a pattern subpath) introduces an entry whose resolved path is an ancestor of one or more existing entries' resolved paths in the same scope, the system shall require gobbling those child entries before installing.
 - [x] **INST-GOB-002**: If any child destination to be gobbled is dirty, or the parent destination holds files outside the child destinations, and `--force` is not given, then the system shall refuse the `add` without prompting and without changes.
 - [x] **INST-GOB-003**: When gobbling is required and stdin is a terminal, the system shall prompt `Gobble <children> into <parent>? [y/N]` and refuse the `add` without changes unless the answer is `y` or `yes`.
 - [x] **INST-GOB-004**: If gobbling is required and stdin is not a terminal, then the system shall refuse the `add` without changes, with a message to remove the child entries first.

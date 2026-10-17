@@ -205,3 +205,24 @@ fn broken_or_foreign_cache_dirs_are_recreated() {
     f.cache.ensure(&f.url, &sha).unwrap();
     assert_eq!(git(&dir, &["config", "remote.origin.url"]), f.url);
 }
+
+// @spec CACHE-LIST-001
+#[test]
+fn lists_every_folder_at_a_commit_offline() {
+    let (f, _) = fixture(&[
+        ("skills/b/SKILL.md", "b"),
+        ("skills/a/SKILL.md", "a"),
+        ("skills/a/refs/x.md", "x"),
+        ("README.md", "r"),
+    ]);
+    let r = remote(&f);
+    let first = git(&r, &["rev-parse", "HEAD"]);
+    commit(&r, &[("later/SKILL.md", "l")]);
+    f.cache.ensure(&f.url, &first).unwrap();
+    fs::rename(remote(&f), f.tmp.path().join("gone")).unwrap();
+    let dirs = f.cache.list_dirs(&f.url, &first).unwrap();
+    assert_eq!(
+        dirs,
+        vec!["skills", "skills/a", "skills/a/refs", "skills/b"]
+    );
+}

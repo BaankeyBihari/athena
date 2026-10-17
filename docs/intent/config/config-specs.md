@@ -42,7 +42,7 @@ Design: `config-design.md`
 ## Local vs Global Conflicts
 
 - [x] **CFG-CONF-001**: When a command runs without `-g`/`--global` and the global config exists, the system shall load the global config and report a state error for every conflict, a conflict being a local entry whose resolved path equals, contains, or is contained by a global entry's resolved path.
-- [x] **CFG-CONF-002**: When `add` runs (local or global scope), the system shall include the entry being added in the state check, except that nesting between the new entry and existing entries is resolved by gobbling (INST-GOB-001 to INST-GOB-006) rather than reported as a state error.
+- [x] **CFG-CONF-002**: When `add` runs (local or global scope), the system shall include every entry being added in the state check, except that nesting between new and existing entries is not reported as a state error: a single-entry add resolves it by gobbling (INST-GOB-001 to INST-GOB-006), and a pattern batch fails (CMD-ADD-014).
 - [x] **CFG-CONF-003**: When a local vs global conflict blocks a command (CFG-STATE-003), the system shall name the local entry and path and the global entry and path, and instruct the user to remove either one, by hand or with `athena remove <name>` or `athena remove -g <name>`.
 - [x] **CFG-CONF-006**: When a command runs with `-g`/`--global`, the system shall not read the local config.
 

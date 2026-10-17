@@ -14,8 +14,25 @@ Design: `commands-design.md`
 - [x] **CMD-ADD-003**: When `add` runs, the system shall name the entry with `--name` if given and with the source's default name otherwise.
 - [x] **CMD-ADD-004**: If the name chosen by `add` already exists in the selected config, then the system shall exit with an error suggesting `update`.
 - [x] **CMD-ADD-005**: When `add` runs with a remote source, the system shall resolve the fragment ref (or `HEAD` when none) to a commit SHA and record it in `commit`.
-- [x] **CMD-ADD-006**: When `add` records an entry, the system shall write `type`, the normalized `source`, `commit` (remote only), `ref` only when the fragment ref is not a 40-character hexadecimal string, `subpath` only when set, `path` only when `--path` is given, and `pinned = true` only when `--pin` is given.
-- [x] **CMD-ADD-007**: When `add` runs, the system shall write the new entry and its `hash` to the config only after its install succeeds, leaving the config unchanged when the install is refused or fails.
+- [x] **CMD-ADD-006**: When `add` records an entry, the system shall write `type`, the normalized `source`, `commit` (remote only), `ref` only when the fragment ref is not a 40-character hexadecimal string, `subpath` only when set (the concrete matched folder when the source used a pattern, never the pattern), `path` only when `--path` is given (`<path>/<name>` for a pattern match), and `pinned = true` only when `--pin` is given.
+- [x] **CMD-ADD-007**: When `add` installs its new entries, the system shall write them and their hashes to the config in one write after the installs; if an install fails after every check passed, the system shall still record the entries installed before the failure, discard the rest, report the failure, and exit with code 1.
+- [x] **CMD-ADD-009**: When `add` is given a source whose subpath is a pattern (SRC-PAT-001), the system shall expand it against the folders at the resolved commit (remote sources) or the real folders under the source directory, not following symlinks (local sources), and create one new entry per matched folder, in sorted order.
+- [x] **CMD-ADD-010**: If an `add` pattern matches no folder, or any of its brace alternatives (SRC-PAT-004) matches no folder, then the system shall fail naming the alternatives that matched nothing, with no change to the config or any destination.
+- [x] **CMD-ADD-011**: If `add` is given `--name` together with a pattern source, then the system shall fail before any network access.
+- [x] **CMD-ADD-012**: When `add` expands a pattern and `--path` is given, the system shall place each new entry at `<path>/<name>`, where `<name>` is the entry's name (SRC-NAME-004).
+- [x] **CMD-ADD-013**: If two entries of one `add` batch share a name, or a new entry's name already exists in the selected config with a different source, subpath, or path, then the system shall fail naming them, with no change to the config or any destination.
+- [x] **CMD-ADD-014**: If an `add` pattern batch has an entry whose path contains or lies inside an existing entry's path, or another entry of the batch, then the system shall fail without prompting, suggesting that the entry be added on its own.
+- [x] **CMD-ADD-015**: When `add` runs (single entry or pattern batch), the system shall stage, check, and plan every new entry before changing any destination (including deleting gobbled children), and if any entry fails, would be skipped, or would be refused, discard all staging and change nothing.
+- [x] **CMD-ADD-016**: When an `add` pattern matches a folder whose entry name already exists in the selected config with the same source, subpath, and path, the system shall skip that match and report it as `already added`.
+- [x] **CMD-ADD-017**: When `add` is given `--pin` with a pattern source, the system shall set `pinned = true` on every new entry of the batch.
+
+## Skill layout check
+
+- [x] **CMD-SKILL-001**: When `add` stages a skill entry without `--no-skill-check`, the system shall require a file named exactly `SKILL.md` (case-sensitive; a symlink to a file counts) at the root of the staged folder, and if any skill entry of the batch lacks one, fail naming those entries with no change to the config or any destination.
+- [x] **CMD-SKILL-002**: When the skill layout check fails for an entry whose staged folder holds `SKILL.md` files that all sit at `<dir>/<x>/SKILL.md` for a single `<dir>`, the system shall suggest the source as typed before `#`, followed by `#<ref>:/<subpath>/<dir>/*` (the user's ref, empty when none; `<dir>/*` when there was no subpath).
+- [x] **CMD-SKILL-003**: When the skill layout check fails and the staged folder holds `SKILL.md` files not covered by CMD-SKILL-002, the system shall list their relative paths.
+- [x] **CMD-SKILL-004**: When the skill layout check fails, the system shall state that `--no-skill-check` installs the folders as they are, and, for a pattern batch, suggest braces (`{a,b}`) to select only the folders that are skills.
+- [x] **CMD-SKILL-005**: The system shall run the skill layout check only in `add` for skill entries; `add --plugin`, `sync`, and `update` shall not run it.
 
 ## remove
 
@@ -54,3 +71,4 @@ Design: `commands-design.md`
 - [x] **CMD-OUT-002**: The system shall write warnings and errors to stderr prefixed `WARN` or `ERROR`, colored only when stderr is a terminal and `NO_COLOR` is unset.
 - [x] **CMD-OUT-003**: When a command finishes, the system shall exit with code 1 if any error, refusal, skip, or failed entry occurred, and with code 0 otherwise.
 - [x] **CMD-OUT-004**: When `show` matches no entries, the system shall exit with code 1, printing `[]` to stdout when `--json` is given.
+- [x] **CMD-OUT-005**: If writing to stdout or stderr fails during any command (for example, a closed pipe), then the system shall ignore the failure and complete the command, including its config write.

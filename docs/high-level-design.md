@@ -14,6 +14,8 @@ AI "skills" and "plugins" are distributed as folders inside Git repositories. Us
 - **Shared cache.** Every remote is shallow-fetched once into `~/.cache/athena/remotes/`, keyed by a hash of the normalized source URL. Installs are file copies out of this cache, never clones into destinations.
 - **Plan/apply.** Every mutating command (`add`, `remove`, `update`, `sync`) first computes a pure `Plan` — an ordered list of actions (fetch, copy, delete, gobble) — from the declared state, the cache state, and the destination state. A separate `apply` step executes it. All safety rules (dirty destinations, path collisions, parent/child overlap) are evaluated while building the plan, as pure functions over already-observed inputs.
 - **Install record.** Each entry carries a `hash` field: a content hash of the files `athena` last wrote to its destination. Dirty detection for non-git destinations compares the destination against that hash. Git destinations additionally use `git status`. The tool rewrites the TOML with `toml_edit`, so user comments and formatting survive.
+- **Source patterns.** A source's subpath may contain glob patterns (`*`, `?`, `{a,b}`), as in `github.com:org/repo#main:/skills/*`. `add` expands the pattern against the folders that exist at the resolved commit and creates one ordinary entry per match. The config never stores a pattern, so every installed skill is pinned, updated, and removed on its own.
+- **Skill layout check.** `add` refuses a skill whose folder has no `SKILL.md` at its root, and says how to proceed: a glob subpath when the source is a collection of skills, or `--no-skill-check` to install it anyway.
 - **Native git.** All Git access goes through the `git` executable via `std::process::Command`. No `git2`.
 
 ## Target Users
@@ -27,6 +29,7 @@ AI "skills" and "plugins" are distributed as folders inside Git repositories. Us
 - No command overwrites or deletes user-modified files in a destination without `--force`.
 - Two entries demanding different commits at one destination path are rejected on config load.
 - Every destination path has exactly one owner: a local entry overlapping a global path blocks local `add`, `sync`, and `update` until the user removes one side.
+- A mistyped source, subpath, or pattern fails on `add` with nothing installed, instead of installing the wrong files.
 - Repeated `sync` with an unchanged config performs no network access once the cache holds the commits.
 
 ## Non-Goals
@@ -34,7 +37,8 @@ AI "skills" and "plugins" are distributed as folders inside Git repositories. Us
 - No package registry or search; sources are Git URLs or local paths.
 - No dependency resolution between packages.
 - No semantic versioning; entries lock to commits (branches and tags are resolved to commits).
-- No behavioral difference between skills and plugins beyond the default install path.
+- No behavioral difference between skills and plugins beyond the default install path and the `SKILL.md` check on `add`.
+- No collection entries: a pattern is expanded once, on `add`. Skills that a repository gains later are not picked up by `update`; re-running the same `add` installs the new ones and skips those already added.
 - No Windows-specific path handling in v1.
 
 ## Tenets
@@ -78,7 +82,9 @@ Components and boundaries:
 | `commit = "HEAD"` or a branch | Resolved to a SHA when written to config | Store the symbolic ref and re-resolve on `sync` | Reproducibility: `sync` must produce the same files on every machine. `update` is the only command that moves a locked commit. |
 | Fetching a locked commit | `git fetch --depth 1 origin <sha>`, full fetch as fallback | `--depth 1` clone only | A shallow clone of the default branch cannot reach an older locked SHA. |
 | `type = "local"` | Files are copied; `update` is a no-op | Symlink | Symlinks make "dirty" and removal ambiguous and leak the source directory into the project. |
-| Skills vs plugins | Same machinery; differ only in default path | Separate install pipelines | Both are directories of files copied from a source; nothing in installing them differs. |
+| Skills vs plugins | Same machinery; differ in default path and the `SKILL.md` check | Separate install pipelines | Both are directories of files copied from a source. Skills share one well-known marker file, so only skills are checked; plugin layouts differ too much between agents for a marker check to be reliable. |
+| Glob subpaths | Expanded on `add` into one concrete entry per match | Store the pattern as a collection entry that re-expands on `update` | Concrete entries reuse every existing rule (locking, pinning, dirty checks, removal) unchanged and keep the config readable. A collection entry would need its own lifecycle for members that appear or disappear upstream. |
+| Skill without `SKILL.md` | `add` aborts, suggesting a glob subpath or `--no-skill-check` | Warn and install; no check | A missing marker almost always means the wrong repository, subpath, or a collection installed as one skill; installing it anyway puts files where no agent will load them. The flag keeps other agents' layouts installable. |
 | Project tooling | `mise`: `mise.toml` pins the Rust toolchain and defines the `build`, `test`, `lint`, and `fmt` tasks | `rust-toolchain.toml` plus cargo aliases; `just` or `make` | One tool pins the toolchain and runs tasks, so contributors and agents use a single entry point (`mise run <task>`). |
 
 ## Success Metrics

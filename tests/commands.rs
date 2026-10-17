@@ -329,6 +329,9 @@ fn gobble_setup(sb: &Sandbox) {
     write(&src.join("one/a.md"), "1");
     write(&src.join("two/b.md"), "2");
     write(&src.join("parent/p.md"), "p");
+    for d in ["one", "two", "parent"] {
+        write(&src.join(d).join("SKILL.md"), d);
+    }
     let one = src.join("one").display().to_string();
     let two = src.join("two").display().to_string();
     assert_eq!(sb.athena(&["add", &one, "--path", "./tools/one"]).code, 0);
@@ -1241,4 +1244,433 @@ fn diagnostics_go_to_stderr_uncolored_when_piped() {
     assert!(r.stderr.starts_with("ERROR"), "{}", r.stderr);
     assert!(!r.stderr.contains('\u{1b}'), "{:?}", r.stderr);
     assert!(r.stdout.is_empty());
+}
+
+// ---------- patterns and the skill layout check ----------
+
+/// A fake remote shaped like a skill collection.
+fn collection(sb: &Sandbox) -> String {
+    sb.repo(
+        "org/pack",
+        &[
+            ("README.md", "r"),
+            ("skills/alpha/SKILL.md", "a"),
+            ("skills/beta/SKILL.md", "b"),
+            ("skills/beta/refs/notes.md", "n"),
+            ("skills/.github/x.yml", "hidden"),
+        ],
+    )
+}
+
+// @spec CMD-ADD-009, SRC-NAME-004, CMD-ADD-006
+#[test]
+fn pattern_add_creates_one_entry_per_folder() {
+    let sb = Sandbox::new();
+    let sha = collection(&sb);
+    let r = sb.athena(&["add", &format!("{}#:/skills/*", sb.url("org/pack"))]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let doc = sb.local_doc();
+    for (name, sub) in [("alpha", "skills/alpha"), ("beta", "skills/beta")] {
+        assert_eq!(field(&doc, "skills", name, "subpath").as_deref(), Some(sub));
+        assert_eq!(field(&doc, "skills", name, "commit"), Some(sha.clone()));
+        assert_eq!(field(&doc, "skills", name, "path"), None);
+        assert!(sb.skill_dir(name).join("SKILL.md").exists());
+    }
+    assert!(
+        field(&doc, "skills", ".github", "type").is_none(),
+        "hidden folders are not matched"
+    );
+    assert!(sb.skill_dir("beta").join("refs/notes.md").exists());
+    assert!(
+        !sb.read_local().contains('*'),
+        "the pattern is never stored"
+    );
+}
+
+// @spec CMD-ADD-009
+#[test]
+fn pattern_add_from_a_local_source_skips_symlinked_folders() {
+    let sb = Sandbox::new();
+    let src = sb.tmp.path().join("local-pack");
+    write(&src.join("skills/alpha/SKILL.md"), "a");
+    write(&sb.tmp.path().join("elsewhere/SKILL.md"), "e");
+    std::os::unix::fs::symlink(sb.tmp.path().join("elsewhere"), src.join("skills/linked")).unwrap();
+    let r = sb.athena(&["add", &format!("{}#:/skills/*", src.display())]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let doc = sb.local_doc();
+    assert_eq!(
+        field(&doc, "skills", "alpha", "type").as_deref(),
+        Some("local")
+    );
+    assert!(field(&doc, "skills", "linked", "type").is_none());
+}
+
+// @spec CMD-ADD-010
+#[test]
+fn brace_alternatives_that_match_nothing_fail_the_add() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    let r = sb.athena(&[
+        "add",
+        &format!("{}#:/skills/{{alpha,alpah}}", sb.url("org/pack")),
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains("skills/alpah") && !r.stderr.contains("skills/alpha "),
+        "{}",
+        r.stderr
+    );
+    assert!(!sb.local_file().exists());
+    assert!(!sb.skill_dir("alpha").exists());
+    let r = sb.athena(&["add", &format!("{}#:/nothing/*", sb.url("org/pack"))]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("nothing/*"), "{}", r.stderr);
+}
+
+// @spec CMD-ADD-011
+#[test]
+fn name_with_a_pattern_is_refused_before_any_fetch() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    let r = sb.athena(&[
+        "add",
+        &format!("{}#:/skills/*", sb.url("org/pack")),
+        "--name",
+        "x",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("--name"), "{}", r.stderr);
+    assert!(!sb.cache_home.join("athena").exists());
+}
+
+// @spec CMD-ADD-012, CMD-ADD-017
+#[test]
+fn pattern_with_path_and_pin_places_and_pins_every_entry() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    let r = sb.athena(&[
+        "add",
+        &format!("{}#:/skills/*", sb.url("org/pack")),
+        "--path",
+        "./tools",
+        "--pin",
+    ]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let doc = sb.local_doc();
+    for name in ["alpha", "beta"] {
+        assert_eq!(
+            field(&doc, "skills", name, "path"),
+            Some(format!("./tools/{name}"))
+        );
+        assert_eq!(
+            field(&doc, "skills", name, "pinned").as_deref(),
+            Some("true")
+        );
+        assert!(
+            sb.project
+                .join("tools")
+                .join(name)
+                .join("SKILL.md")
+                .exists()
+        );
+    }
+}
+
+// @spec CMD-ADD-013
+#[test]
+fn name_clashes_fail_the_whole_batch() {
+    let sb = Sandbox::new();
+    sb.repo(
+        "org/two",
+        &[
+            ("x/same/SKILL.md", "x"),
+            ("y/same/SKILL.md", "y"),
+            ("y/other/SKILL.md", "o"),
+        ],
+    );
+    let r = sb.athena(&["add", &format!("{}#:/{{x,y}}/*", sb.url("org/two"))]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("same"), "{}", r.stderr);
+    assert!(!sb.local_file().exists());
+
+    let src = sb.tmp.path().join("mine");
+    write(&src.join("SKILL.md"), "m");
+    assert_eq!(
+        sb.athena(&[
+            "add",
+            &src.display().to_string(),
+            "--name",
+            "other",
+            "--path",
+            "./elsewhere"
+        ])
+        .code,
+        0
+    );
+    let before = sb.read_local();
+    let r = sb.athena(&["add", &format!("{}#:/y/*", sb.url("org/two"))]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("other"), "{}", r.stderr);
+    assert_eq!(sb.read_local(), before);
+    assert!(!sb.skill_dir("same").exists());
+}
+
+// @spec CMD-ADD-016
+#[test]
+fn rerunning_a_pattern_adds_only_new_folders() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    let src = format!("{}#:/skills/*", sb.url("org/pack"));
+    assert_eq!(sb.athena(&["add", &src]).code, 0);
+    let alpha_commit = field(&sb.local_doc(), "skills", "alpha", "commit");
+    sb.push("org/pack", &[("skills/gamma/SKILL.md", "g")]);
+    let r = sb.athena(&["add", &src]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout
+            .lines()
+            .any(|l| l.contains("alpha") && l.contains("already added")),
+        "{}",
+        r.stdout
+    );
+    let doc = sb.local_doc();
+    assert!(field(&doc, "skills", "gamma", "type").is_some());
+    assert_eq!(
+        field(&doc, "skills", "alpha", "commit"),
+        alpha_commit,
+        "existing entries are untouched"
+    );
+}
+
+// @spec CMD-ADD-014, CFG-CONF-002
+#[test]
+fn pattern_batches_never_gobble() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    let src = sb.tmp.path().join("tools-src");
+    write(&src.join("SKILL.md"), "t");
+    assert_eq!(
+        sb.athena(&["add", &src.display().to_string(), "--path", "./tools"])
+            .code,
+        0
+    );
+    let before = sb.read_local();
+    let r = sb.athena_tty(
+        &[
+            "add",
+            &format!("{}#:/skills/*", sb.url("org/pack")),
+            "--path",
+            "./tools",
+        ],
+        "y",
+    );
+    assert_eq!(r.code, 1);
+    assert!(!r.stdout.contains("[y/N]"), "must not prompt: {}", r.stdout);
+    assert!(r.stdout.contains("on its own"), "{}", r.stdout);
+    assert_eq!(sb.read_local(), before);
+}
+
+// @spec CMD-ADD-015
+#[test]
+fn one_blocked_entry_stops_the_whole_batch() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    write(&sb.skill_dir("beta").join("mine.md"), "user file");
+    let r = sb.athena(&["add", &format!("{}#:/skills/*", sb.url("org/pack"))]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("beta"), "{}", r.stderr);
+    assert!(!sb.skill_dir("alpha").exists(), "nothing installed");
+    assert!(!sb.local_file().exists());
+    assert!(staging_leftovers(&sb.project.join(".agents/skills")).is_empty());
+}
+
+// @spec CMD-ADD-015
+#[test]
+fn gobbled_children_survive_a_failed_parent_export() {
+    let sb = Sandbox::new();
+    gobble_setup(&sb);
+    let parent = sb.tmp.path().join("srcs/parent");
+    fs::remove_file(parent.join("SKILL.md")).unwrap();
+    let r = sb.athena_tty(
+        &["add", &parent.display().to_string(), "--path", "./tools"],
+        "y",
+    );
+    assert_eq!(r.code, 1);
+    assert!(
+        sb.project.join("tools/one/a.md").exists(),
+        "children are deleted only after the parent passes every check"
+    );
+    assert!(sb.project.join("tools/two/b.md").exists());
+}
+
+// @spec CMD-ADD-007
+#[test]
+fn a_failure_mid_install_records_what_was_installed() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    write(&sb.skill_dir("beta").join("mine.md"), "locked");
+    let locked = sb.skill_dir("beta");
+    let chflags = |flag: &str| {
+        assert!(
+            std::process::Command::new("chflags")
+                .args([flag, &locked.display().to_string()])
+                .status()
+                .unwrap()
+                .success()
+        )
+    };
+    chflags("uchg");
+    let r = sb.athena(&[
+        "add",
+        &format!("{}#:/skills/*", sb.url("org/pack")),
+        "--force",
+    ]);
+    chflags("nouchg");
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    let doc = sb.local_doc();
+    assert!(
+        field(&doc, "skills", "alpha", "hash").is_some(),
+        "installed entry is recorded"
+    );
+    assert!(
+        field(&doc, "skills", "beta", "type").is_none(),
+        "failed entry is not recorded"
+    );
+    assert!(sb.skill_dir("alpha").join("SKILL.md").exists());
+}
+
+// @spec CMD-SKILL-001, CMD-SKILL-004
+#[test]
+fn skills_without_skill_md_are_refused() {
+    let sb = Sandbox::new();
+    sb.repo(
+        "org/mixed",
+        &[
+            ("skills/alpha/SKILL.md", "a"),
+            ("skills/shared/util.md", "u"),
+            ("skills/lower/skill.md", "l"),
+        ],
+    );
+    let r = sb.athena(&["add", &format!("{}#:/skills/*", sb.url("org/mixed"))]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains("shared") && r.stderr.contains("lower") && !r.stderr.contains("`alpha`"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("--no-skill-check") && r.stderr.contains('{'),
+        "{}",
+        r.stderr
+    );
+    assert!(!sb.local_file().exists());
+    assert!(!sb.skill_dir("alpha").exists());
+
+    let r = sb.athena(&[
+        "add",
+        &format!("{}#:/skills/*", sb.url("org/mixed")),
+        "--no-skill-check",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(sb.skill_dir("shared").join("util.md").exists());
+}
+
+// @spec CMD-SKILL-001
+#[test]
+fn a_symlinked_skill_md_counts() {
+    let sb = Sandbox::new();
+    let src = sb.tmp.path().join("linked");
+    write(&src.join("docs/skill.txt"), "s");
+    std::os::unix::fs::symlink("docs/skill.txt", src.join("SKILL.md")).unwrap();
+    let r = sb.athena(&["add", &src.display().to_string()]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+}
+
+// @spec CMD-SKILL-002
+#[test]
+fn collections_get_an_exact_pattern_suggestion() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    let base = sb.url("org/pack");
+    let r = sb.athena(&["add", &base]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains(&format!("{base}#:/skills/*")),
+        "{}",
+        r.stderr
+    );
+    let r = sb.athena(&["add", &format!("{base}#main")]);
+    assert!(
+        r.stderr.contains(&format!("{base}#main:/skills/*")),
+        "{}",
+        r.stderr
+    );
+
+    sb.repo(
+        "org/nested",
+        &[
+            ("pack/skills/x/SKILL.md", "x"),
+            ("pack/skills/y/SKILL.md", "y"),
+        ],
+    );
+    let nested = sb.url("org/nested");
+    let r = sb.athena(&["add", &format!("{nested}#:/pack")]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains(&format!("{nested}#:/pack/skills/*")),
+        "{}",
+        r.stderr
+    );
+}
+
+// @spec CMD-SKILL-003
+#[test]
+fn mixed_depths_list_where_skill_md_files_are() {
+    let sb = Sandbox::new();
+    sb.repo("org/ragged", &[("a/SKILL.md", "a"), ("b/c/SKILL.md", "c")]);
+    let r = sb.athena(&["add", &sb.url("org/ragged")]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains("a/SKILL.md") && r.stderr.contains("b/c/SKILL.md"),
+        "{}",
+        r.stderr
+    );
+}
+
+// @spec CMD-SKILL-005
+#[test]
+fn plugins_sync_and_update_skip_the_skill_check() {
+    let sb = Sandbox::new();
+    sb.repo("org/plain", &[("tool.md", "t")]);
+    let r = sb.athena(&["add", &sb.url("org/plain"), "--plugin"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let sha = sb.repo("org/bare", &[("notes.md", "n")]);
+    let mut text = sb.read_local();
+    text.push_str(&remote_entry("org/bare", &sb.url("org/bare"), &sha, ""));
+    sb.write_local(&text);
+    assert_eq!(sb.athena(&["sync"]).code, 0);
+    sb.push("org/bare", &[("notes.md", "n2")]);
+    assert_eq!(sb.athena(&["update", "org/bare"]).code, 0);
+}
+
+// @spec CMD-OUT-005
+#[test]
+fn a_closed_stdout_does_not_abort_an_add() {
+    let sb = Sandbox::new();
+    collection(&sb);
+    let mut cmd = sb.command(&["add", &format!("{}#:/skills/*", sb.url("org/pack"))]);
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    drop(child.stderr.take());
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(0));
+    let doc = sb.local_doc();
+    assert!(
+        field(&doc, "skills", "alpha", "hash").is_some()
+            && field(&doc, "skills", "beta", "hash").is_some()
+    );
 }

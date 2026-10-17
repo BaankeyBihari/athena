@@ -12,6 +12,18 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use wildmatch::WildMatch;
 
+/// Output that never panics: a closed stdout (for example `| head`) must not abort a command midway.
+// @spec CMD-OUT-005
+macro_rules! say {
+    ($($t:tt)*) => {{ let _ = writeln!(std::io::stdout(), $($t)*); }};
+}
+macro_rules! say_inline {
+    ($($t:tt)*) => {{ let _ = write!(std::io::stdout(), $($t)*); }};
+}
+macro_rules! shout {
+    ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), $($t)*); }};
+}
+
 #[derive(Parser)]
 #[command(
     name = "athena",
@@ -38,6 +50,9 @@ enum Cmd {
         /// Exclude the entry from `update --all` refreshes
         #[arg(long)]
         pin: bool,
+        /// Install skills even without a SKILL.md at their root
+        #[arg(long)]
+        no_skill_check: bool,
         #[arg(short = 'g', long)]
         global: bool,
         #[arg(long)]
@@ -114,14 +129,14 @@ pub fn main() -> i32 {
         Ok(true) => 0,
         Ok(false) => 1,
         Err(msg) => {
-            eprintln!("{} {msg}", "ERROR".red());
+            shout!("{} {msg}", "ERROR".red());
             1
         }
     }
 }
 
 fn warn(msg: impl std::fmt::Display) {
-    eprintln!("{} {msg}", "WARN".yellow());
+    shout!("{} {msg}", "WARN".yellow());
 }
 
 fn run(cmd: Cmd) -> Result<bool, String> {
@@ -132,6 +147,7 @@ fn run(cmd: Cmd) -> Result<bool, String> {
             path,
             plugin,
             pin,
+            no_skill_check,
             global,
             force,
         } => Ctx::new(global)?.add(
@@ -141,6 +157,7 @@ fn run(cmd: Cmd) -> Result<bool, String> {
             if plugin { Kind::Plugin } else { Kind::Skill },
             pin,
             force,
+            !no_skill_check,
         ),
         Cmd::Remove {
             name,
@@ -200,6 +217,13 @@ impl Outcome {
             _ => None,
         }
     }
+}
+
+/// A staged entry with its planned install.
+struct Prepared {
+    staging: PathBuf,
+    target_hash: String,
+    action: Action,
 }
 
 /// Pending config edits, written once after the filesystem work.
@@ -357,38 +381,51 @@ impl Ctx {
         )
     }
 
-    /// Stages, observes, plans, and applies one entry's install at `sha`.
-    // @spec INST-PLAN-006, INST-APPLY-003
-    fn apply(&self, entry: &Entry, sha: Option<&str>, force: bool, new_entry: bool) -> Outcome {
-        let (staging, target_hash) = match self.stage(entry, sha) {
-            Ok(s) => s,
-            Err(e) => return Outcome::Failed(e),
-        };
-        let discard = || {
-            let _ = fs::remove_dir_all(&staging);
-        };
-        let dest = match install::observe_dest(&entry.resolved) {
+    /// Stages one entry at `sha` and plans its install; `dest` overrides the observed destination.
+    fn prepare(
+        &self,
+        entry: &Entry,
+        sha: Option<&str>,
+        force: bool,
+        new_entry: bool,
+        dest: Option<Dest>,
+    ) -> Result<Prepared, String> {
+        let (staging, target_hash) = self.stage(entry, sha)?;
+        let dest = match dest.map_or_else(|| install::observe_dest(&entry.resolved), Ok) {
             Ok(d) => d,
             Err(e) => {
-                discard();
-                return Outcome::Failed(e);
+                let _ = fs::remove_dir_all(&staging);
+                return Err(e);
             }
         };
-        let git_clean = Self::git_clean(entry, &dest);
         let facts = Facts {
             target_hash: target_hash.clone(),
+            git_clean: Self::git_clean(entry, &dest),
             dest,
             recorded_hash: entry.hash.clone(),
-            git_clean,
             new_entry,
         };
-        match install::plan(&facts, force, &entry.resolved) {
+        let action = install::plan(&facts, force, &entry.resolved);
+        Ok(Prepared {
+            staging,
+            target_hash,
+            action,
+        })
+    }
+
+    /// Carries out a prepared plan, consuming its staging directory.
+    // @spec INST-APPLY-003
+    fn finish(entry: &Entry, p: Prepared) -> Outcome {
+        let discard = || {
+            let _ = fs::remove_dir_all(&p.staging);
+        };
+        match p.action {
             Action::UpToDate { record_hash } => {
                 discard();
-                Outcome::UpToDate(record_hash.then_some(target_hash))
+                Outcome::UpToDate(record_hash.then_some(p.target_hash))
             }
-            Action::Install => match install::install_staged(&staging, &entry.resolved) {
-                Ok(()) => Outcome::Installed(target_hash),
+            Action::Install => match install::install_staged(&p.staging, &entry.resolved) {
+                Ok(()) => Outcome::Installed(p.target_hash),
                 Err(e) => Outcome::Failed(e),
             },
             Action::Skip(r) => {
@@ -399,6 +436,15 @@ impl Ctx {
                 discard();
                 Outcome::Failed(r)
             }
+        }
+    }
+
+    /// Stages, plans, and applies one entry's install at `sha`.
+    // @spec INST-PLAN-006
+    fn apply(&self, entry: &Entry, sha: Option<&str>, force: bool, new_entry: bool) -> Outcome {
+        match self.prepare(entry, sha, force, new_entry, None) {
+            Ok(p) => Self::finish(entry, p),
+            Err(e) => Outcome::Failed(e),
         }
     }
 
@@ -481,7 +527,7 @@ impl Ctx {
         let mut ok = true;
         for entry in &cfg.entries {
             let outcome = self.sync_entry(entry, force, &mut changes);
-            println!("{}: {}", entry.name, outcome.text());
+            say!("{}: {}", entry.name, outcome.text());
             ok &= outcome.ok();
         }
         self.save(&changes)?;
@@ -507,14 +553,15 @@ impl Ctx {
             } else {
                 ("", self.update_entry(entry, force, &mut changes))
             };
-            println!("{}: {prefix}{}", entry.name, outcome.text());
+            say!("{}: {prefix}{}", entry.name, outcome.text());
             ok &= outcome.ok();
         }
         self.save(&changes)?;
         Ok(ok)
     }
 
-    // @spec CMD-ADD-001, CMD-ADD-002, CMD-ADD-003, CMD-ADD-004, CMD-ADD-005, CMD-ADD-006, CMD-ADD-007, CFG-CONF-002, INST-GOB-003, INST-GOB-004, INST-GOB-005
+    // @spec CMD-ADD-001, CMD-ADD-002, CMD-ADD-003, CMD-ADD-004, CMD-ADD-005, CMD-ADD-006, CMD-ADD-007, CMD-ADD-011, CMD-ADD-012, CMD-ADD-013, CMD-ADD-015, CMD-ADD-016, CMD-ADD-017, CFG-CONF-002, INST-GOB-003, INST-GOB-004, INST-GOB-005
+    #[allow(clippy::too_many_arguments)]
     fn add(
         &self,
         input: &str,
@@ -523,85 +570,240 @@ impl Ctx {
         kind: Kind,
         pin: bool,
         force: bool,
+        skill_check: bool,
     ) -> Result<bool, String> {
         if self.scope == Scope::Global && path.is_none() {
             return Err("`--path` is required with `--global`".into());
         }
         let parsed = source::parse(input, &self.env.cwd, &self.env.home)?;
-        let cfg = self.load(false)?;
-        let name = name.unwrap_or(parsed.default_name.clone());
-        if name.is_empty() {
-            return Err(format!(
-                "cannot derive a name from `{input}`; pass `--name`"
-            ));
+        let pattern = parsed.subpath.clone().filter(|s| source::is_pattern(s));
+        if pattern.is_some() && name.is_some() {
+            return Err(
+                "`--name` cannot be used with a pattern; each matched folder is named after itself"
+                    .into(),
+            );
         }
-        if cfg.get(&name).is_some() {
-            return Err(format!(
-                "`{name}` already exists in `{}`; use `athena update {name}`",
-                self.file().display()
-            ));
+        let cfg = self.load(false)?;
+        let single_name = name.unwrap_or(parsed.default_name.clone());
+        if pattern.is_none() {
+            if single_name.is_empty() {
+                return Err(format!(
+                    "cannot derive a name from `{input}`; pass `--name`"
+                ));
+            }
+            if cfg.get(&single_name).is_some() {
+                return Err(format!(
+                    "`{single_name}` already exists in `{}`; use `athena update {single_name}`",
+                    self.file().display()
+                ));
+            }
         }
         Self::block_on(&self.state(&cfg)?)?;
 
-        let resolved = cfg.resolve_path(kind, &name, path.as_deref(), &self.env)?;
         let (source_type, source) = match &parsed.kind {
             SourceKind::Remote { url } => (SourceType::Remote, url.clone()),
             SourceKind::Local { path } => (SourceType::Local, path.display().to_string()),
         };
-        let reference = parsed.reference.clone().unwrap_or_else(|| "HEAD".into());
-        let mut entry = Entry {
-            name: name.clone(),
-            kind,
-            source_type,
-            source,
-            commit: (source_type == SourceType::Remote).then(|| reference.clone()),
-            git_ref: parsed.reference.clone().filter(|r| !is_locked(r)),
-            subpath: parsed.subpath.clone(),
-            path,
-            pinned: pin,
-            hash: None,
-            resolved: resolved.clone(),
+        let sha = match source_type {
+            SourceType::Remote => Some(
+                self.cache
+                    .resolve(&source, parsed.reference.as_deref().unwrap_or("HEAD"))?,
+            ),
+            SourceType::Local => None,
         };
+        let subpaths = match &pattern {
+            None => vec![parsed.subpath.clone()],
+            Some(p) => self
+                .expand(p, source_type, &source, sha.as_deref())?
+                .into_iter()
+                .map(Some)
+                .collect(),
+        };
+
+        let mut entries: Vec<Entry> = Vec::new();
+        for subpath in subpaths {
+            // @spec SRC-NAME-004
+            let (name, path) = match (&pattern, &subpath) {
+                (Some(_), Some(sub)) => {
+                    let n = sub.rsplit('/').next().unwrap_or(sub).to_string();
+                    let p = path
+                        .as_ref()
+                        .map(|p| format!("{}/{n}", p.trim_end_matches('/')));
+                    (n, p)
+                }
+                _ => (single_name.clone(), path.clone()),
+            };
+            let entry = Entry {
+                resolved: cfg.resolve_path(kind, &name, path.as_deref(), &self.env)?,
+                name,
+                kind,
+                source_type,
+                source: source.clone(),
+                commit: sha.clone(),
+                git_ref: parsed.reference.clone().filter(|r| !is_locked(r)),
+                subpath,
+                path,
+                pinned: pin,
+                hash: None,
+            };
+            if let Some(existing) = cfg.get(&entry.name) {
+                let same = (&existing.source, &existing.subpath, &existing.resolved)
+                    == (&entry.source, &entry.subpath, &entry.resolved);
+                if !same {
+                    return Err(format!(
+                        "`{}` already exists in `{}` with a different source, subpath, or path",
+                        entry.name,
+                        self.file().display()
+                    ));
+                }
+                say!("{}: already added", entry.name);
+                continue;
+            }
+            if entries.iter().any(|e| e.name == entry.name) {
+                return Err(format!(
+                    "two matched folders are both named `{}`; narrow the pattern",
+                    entry.name
+                ));
+            }
+            entries.push(entry);
+        }
+        if entries.is_empty() {
+            return Ok(true);
+        }
+
         let mut with_new = cfg.clone();
-        with_new.entries.push(entry.clone());
+        with_new.entries.extend(entries.iter().cloned());
         let errors: Vec<StateError> = self
             .state(&with_new)?
             .into_iter()
-            .filter(|e| !(matches!(e, StateError::Nesting { .. }) && e.involves(&name, self.scope)))
+            .filter(|e| {
+                !(matches!(e, StateError::Nesting { .. })
+                    && entries.iter().any(|n| e.involves(&n.name, self.scope)))
+            })
             .collect();
         Self::block_on(&errors)?;
-
-        let children = self.plan_gobble(&cfg, &entry, force)?;
-        let sha = match source_type {
-            SourceType::Remote => {
-                let sha = self.cache.resolve(&entry.source, &reference)?;
-                entry.commit = Some(sha.clone());
-                Some(sha)
+        let children = match pattern {
+            None => self.plan_gobble(&cfg, &entries[0], force)?,
+            Some(_) => {
+                Self::refuse_nesting(&with_new.entries, &entries)?;
+                vec![]
             }
-            SourceType::Local => None,
         };
-        // ponytail: children are deleted before the parent is exported; if the export then fails,
-        // their entries stay in the config and `sync` restores them.
+
+        // Stage, check, and plan every entry before any destination changes.
+        let mut prepared: Vec<Prepared> = Vec::new();
+        let discard = |prepared: &[Prepared]| {
+            for p in prepared {
+                let _ = fs::remove_dir_all(&p.staging);
+            }
+        };
+        for entry in &entries {
+            let dest = (!children.is_empty()).then_some(Dest::Absent);
+            match self.prepare(entry, sha.as_deref(), force, true, dest) {
+                Ok(p) => prepared.push(p),
+                Err(e) => {
+                    discard(&prepared);
+                    return Err(format!("cannot add `{}`: {e}", entry.name));
+                }
+            }
+        }
+        if kind == Kind::Skill
+            && skill_check
+            && let Err(e) = skill_layout(input, &parsed, pattern.is_some(), &entries, &prepared)
+        {
+            discard(&prepared);
+            return Err(e);
+        }
+        if let Some((entry, reason)) =
+            entries
+                .iter()
+                .zip(&prepared)
+                .find_map(|(e, p)| match &p.action {
+                    Action::Skip(r) | Action::Refuse(r) => Some((e, r.clone())),
+                    _ => None,
+                })
+        {
+            discard(&prepared);
+            return Err(format!("cannot add `{}`: {reason}", entry.name));
+        }
+
         for child in &children {
             if child.resolved.exists() {
                 fs::remove_dir_all(&child.resolved)
                     .map_err(|e| format!("cannot remove `{}`: {e}", child.resolved.display()))?;
             }
         }
-        let outcome = self.apply(&entry, sha.as_deref(), force, true);
-        match outcome {
-            Outcome::Installed(h) | Outcome::UpToDate(Some(h)) => entry.hash = Some(h),
-            Outcome::UpToDate(None) => {}
-            other => return Err(format!("cannot add `{name}`: {}", other.text())),
-        }
         let mut ed = Editor::open(&self.file())?;
         for child in &children {
             ed.remove(child.kind, &child.name);
         }
-        ed.insert(&entry);
+        let mut failure = None;
+        let mut pending = prepared.into_iter();
+        for mut entry in entries {
+            let Some(p) = pending.next() else { break };
+            match Self::finish(&entry, p) {
+                Outcome::Installed(h) | Outcome::UpToDate(Some(h)) => {
+                    entry.hash = Some(h);
+                    ed.insert(&entry);
+                    say!("added `{}` at `{}`", entry.name, entry.resolved.display());
+                }
+                other => {
+                    failure = Some(format!("cannot add `{}`: {}", entry.name, other.text()));
+                    break;
+                }
+            }
+        }
+        discard(&pending.collect::<Vec<_>>());
         ed.save()?;
-        println!("added `{name}` at `{}`", resolved.display());
-        Ok(true)
+        failure.map_or(Ok(true), Err)
+    }
+
+    /// Folders a pattern selects at the commit (remote) or under the source directory (local).
+    // @spec CMD-ADD-009, CMD-ADD-010
+    fn expand(
+        &self,
+        pattern: &str,
+        source_type: SourceType,
+        source: &str,
+        sha: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let alts = source::alternatives(pattern)?;
+        let depth = pattern.split('/').count();
+        let dirs = match (source_type, sha) {
+            (SourceType::Remote, Some(sha)) => self.cache.list_dirs(source, sha)?,
+            _ => local_dirs(Path::new(source), depth)?,
+        };
+        let unmatched: Vec<String> = alts
+            .iter()
+            .filter(|a| !dirs.iter().any(|d| source::matches(a, d)))
+            .map(|a| format!("`{a}`"))
+            .collect();
+        if !unmatched.is_empty() {
+            return Err(format!("no folder matches {}", unmatched.join(", ")));
+        }
+        let mut selected: Vec<String> = dirs
+            .into_iter()
+            .filter(|d| alts.iter().any(|a| source::matches(a, d)))
+            .collect();
+        selected.dedup();
+        Ok(selected)
+    }
+
+    /// A pattern batch never gobbles: any nesting with an existing or sibling entry fails the add.
+    // @spec CMD-ADD-014
+    fn refuse_nesting(all: &[Entry], new: &[Entry]) -> Result<(), String> {
+        for n in new {
+            if let Some(o) = all.iter().find(|o| {
+                o.name != n.name
+                    && (o.resolved.starts_with(&n.resolved) || n.resolved.starts_with(&o.resolved))
+            }) {
+                return Err(format!(
+                    "`{}` would be nested with entry `{}`; add it on its own to gobble or resolve the overlap",
+                    n.name, o.name
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Checks nesting between a new entry and existing ones; returns the children to gobble once confirmed.
@@ -657,7 +859,7 @@ impl Ctx {
                 entry.name
             ));
         }
-        print!("Gobble {list} into `{}`? [y/N] ", entry.name);
+        say_inline!("Gobble {list} into `{}`? [y/N] ", entry.name);
         let _ = std::io::stdout().flush();
         let mut answer = String::new();
         let _ = std::io::stdin().read_line(&mut answer);
@@ -686,12 +888,12 @@ impl Ctx {
         ed.remove(entry.kind, name);
         ed.save()?;
         if in_error {
-            println!(
+            say!(
                 "removed `{name}` from the config; files at `{}` left untouched",
                 entry.resolved.display()
             );
         } else {
-            println!("removed `{name}`");
+            say!("removed `{name}`");
         }
         Ok(true)
     }
@@ -702,7 +904,7 @@ impl Ctx {
         let entry = self.entry(&cfg, name)?;
         let word = if on { "pinned" } else { "unpinned" };
         if entry.pinned == on {
-            println!("`{name}` is already {word}; no change");
+            say!("`{name}` is already {word}; no change");
             return Ok(true);
         }
         let mut ed = Editor::open(&self.file())?;
@@ -712,7 +914,7 @@ impl Ctx {
             ed.unset(entry.kind, name, "pinned");
         }
         ed.save()?;
-        println!("`{name}` {word}");
+        say!("`{name}` {word}");
         Ok(true)
     }
 
@@ -730,7 +932,7 @@ impl Ctx {
         let cfg = self.load_warning()?;
         if json {
             let rows: Vec<_> = cfg.entries.iter().map(|e| row(e, None)).collect();
-            println!("{}", serde_json::Value::Array(rows));
+            say!("{}", serde_json::Value::Array(rows));
             return Ok(true);
         }
         let mut table = comfy_table::Table::new();
@@ -752,7 +954,7 @@ impl Ctx {
                 &e.source,
             ]);
         }
-        println!("{table}");
+        say!("{table}");
         Ok(true)
     }
 
@@ -767,11 +969,11 @@ impl Ctx {
             .collect();
         if json {
             let rows: Vec<_> = matches.iter().map(|e| row(e, Some(status(e)))).collect();
-            println!("{}", serde_json::Value::Array(rows));
+            say!("{}", serde_json::Value::Array(rows));
         } else {
             for e in &matches {
                 let opt = |v: &Option<String>| v.clone().unwrap_or_else(|| "-".into());
-                println!("{}", e.name.bold());
+                say!("{}", e.name.bold());
                 for (k, v) in [
                     ("kind", e.kind.label().to_string()),
                     ("type", e.source_type.label().to_string()),
@@ -785,12 +987,12 @@ impl Ctx {
                     ("resolved path", e.resolved.display().to_string()),
                     ("status", status(e).to_string()),
                 ] {
-                    println!("  {k}: {v}");
+                    say!("  {k}: {v}");
                 }
             }
         }
         if matches.is_empty() {
-            eprintln!("{} no entries match `{pattern}`", "ERROR".red());
+            shout!("{} no entries match `{pattern}`", "ERROR".red());
         }
         Ok(!matches.is_empty())
     }
@@ -822,4 +1024,114 @@ fn row(e: &Entry, status: Option<&str>) -> serde_json::Value {
         v["status"] = s.into();
     }
     v
+}
+
+/// Real folders under `root`, as relative paths, at most `depth` components deep. Symlinks are not followed.
+fn local_dirs(root: &Path, depth: usize) -> Result<Vec<String>, String> {
+    fn walk(root: &Path, rel: &str, depth: usize, out: &mut Vec<String>) -> Result<(), String> {
+        let dir = root.join(rel);
+        let rd = fs::read_dir(&dir).map_err(|e| format!("cannot read `{}`: {e}", dir.display()))?;
+        for entry in rd.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let child = if rel.is_empty() {
+                    name
+                } else {
+                    format!("{rel}/{name}")
+                };
+                if depth > 1 {
+                    walk(root, &child, depth - 1, out)?;
+                }
+                out.push(child);
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(root, "", depth, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+/// Whether `dir` holds a file named exactly `SKILL.md` (a symlink to a file counts).
+fn has_skill_md(dir: &Path) -> bool {
+    fs::read_dir(dir).is_ok_and(|rd| {
+        rd.flatten()
+            .any(|e| e.file_name() == "SKILL.md" && e.path().is_file())
+    })
+}
+
+/// Relative paths of every exact-case `SKILL.md` under `dir`.
+fn skill_md_files(dir: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                stack.push(p);
+            } else if e.file_name() == "SKILL.md" && p.is_file() {
+                found.push(p.strip_prefix(dir).unwrap().to_string_lossy().into_owned());
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Refuses skills whose staged folder has no `SKILL.md` at its root, explaining how to proceed.
+// @spec CMD-SKILL-001, CMD-SKILL-002, CMD-SKILL-003, CMD-SKILL-004, CMD-SKILL-005
+fn skill_layout(
+    input: &str,
+    parsed: &source::ParsedSource,
+    pattern: bool,
+    entries: &[Entry],
+    prepared: &[Prepared],
+) -> Result<(), String> {
+    let failing: Vec<(&Entry, &Prepared)> = entries
+        .iter()
+        .zip(prepared)
+        .filter(|(_, p)| !has_skill_md(&p.staging))
+        .collect();
+    if failing.is_empty() {
+        return Ok(());
+    }
+    let names = failing
+        .iter()
+        .map(|(e, _)| format!("`{}`", e.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut msg = format!("no `SKILL.md` at the root of {names}");
+    if pattern {
+        msg.push_str("; use braces such as `{a,b}` in the pattern to select only the folders that are skills");
+    } else if let [(_, p)] = failing.as_slice() {
+        let found = skill_md_files(&p.staging);
+        let parents: Vec<&str> = found
+            .iter()
+            .filter_map(|f| Path::new(f).parent()?.parent()?.to_str())
+            .collect();
+        if !found.is_empty()
+            && parents.len() == found.len()
+            && parents.iter().all(|d| *d == parents[0])
+        {
+            let base = input.split('#').next().unwrap_or(input);
+            let glob = [parsed.subpath.as_deref().unwrap_or(""), parents[0], "*"]
+                .iter()
+                .filter(|s| !s.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join("/");
+            msg.push_str(&format!(
+                "; it looks like a collection of skills, so add them with `{base}#{}:/{glob}`",
+                parsed.reference.as_deref().unwrap_or("")
+            ));
+        } else if !found.is_empty() {
+            msg.push_str(&format!(
+                "; `SKILL.md` files found at: {}",
+                found.join(", ")
+            ));
+        }
+    }
+    msg.push_str("; pass `--no-skill-check` to install as they are");
+    Err(msg)
 }

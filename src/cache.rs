@@ -120,6 +120,21 @@ impl Cache {
         Err(format!("commit `{sha}` not found in `{url}`{detail}"))
     }
 
+    /// Every folder in the commit's tree, sorted. The commit must already be present.
+    // @spec CACHE-LIST-001
+    pub fn list_dirs(&self, url: &str, sha: &str) -> Result<Vec<String>, String> {
+        let dir = self.repo(url)?;
+        let out = git(Some(&dir), &["ls-tree", "-r", "-t", "-z", sha])?;
+        let mut dirs: Vec<String> = out
+            .split('\0')
+            .filter_map(|rec| rec.split_once('\t'))
+            .filter(|(meta, _)| meta.split(' ').nth(1) == Some("tree"))
+            .map(|(_, path)| path.to_string())
+            .collect();
+        dirs.sort();
+        Ok(dirs)
+    }
+
     // @spec CACHE-EXP-001, CACHE-EXP-002
     pub fn export(
         &self,

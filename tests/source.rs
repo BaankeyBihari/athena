@@ -1,4 +1,4 @@
-use athena::source::{ParsedSource, SourceKind, parse};
+use athena::source::{ParsedSource, SourceKind, alternatives, is_pattern, matches, parse};
 use std::path::{Path, PathBuf};
 
 fn ok(input: &str) -> ParsedSource {
@@ -186,4 +186,88 @@ fn local_is_named_after_last_component() {
         "linter"
     );
     assert_eq!(ok("/Users/dev/repo#:a/b").default_name, "b");
+}
+
+// @spec SRC-FRAG-007
+#[test]
+fn leading_slash_fragment_is_a_subpath_without_ref() {
+    let p = ok("github.com:jszmajda/lid#/plugins/arrow-maintenance/skills");
+    assert_eq!(p.reference, None);
+    assert_eq!(
+        p.subpath.as_deref(),
+        Some("plugins/arrow-maintenance/skills")
+    );
+    let p = ok("github.com:jszmajda/lid#main/plugins/x");
+    assert_eq!(
+        p.reference.as_deref(),
+        Some("main/plugins/x"),
+        "a ref may contain `/`"
+    );
+    assert_eq!(p.subpath, None);
+}
+
+// @spec SRC-PAT-001
+#[test]
+fn pattern_subpaths_are_detected_and_kept() {
+    assert!(is_pattern("skills/*"));
+    assert!(is_pattern("skills/?x"));
+    assert!(is_pattern("skills/{a,b}"));
+    assert!(!is_pattern("skills/a"));
+    let p = ok("github.com:jszmajda/lid#main:/plugins/*/skills/{a,b}");
+    assert_eq!(p.reference.as_deref(), Some("main"));
+    assert_eq!(p.subpath.as_deref(), Some("plugins/*/skills/{a,b}"));
+}
+
+// @spec SRC-PAT-002
+#[test]
+fn patterns_match_component_by_component() {
+    assert!(matches("skills/*", "skills/brainstorming"));
+    assert!(matches("skills/*", "skills/x"));
+    assert!(!matches("skills/*", "skills"));
+    assert!(!matches("skills/*", "skills/a/b"), "`*` never crosses `/`");
+    assert!(matches("plugins/*/skills/*", "plugins/lid/skills/coach"));
+    assert!(matches("skills/?b", "skills/ab"));
+    assert!(!matches("skills/?b", "skills/abb"));
+    assert!(matches("skills/map-*", "skills/map-codebase"));
+    assert!(!matches("skills/a", "skills/ab"));
+}
+
+// @spec SRC-PAT-003
+#[test]
+fn wildcards_skip_hidden_folders() {
+    assert!(!matches("skills/*", "skills/.github"));
+    assert!(!matches("skills/?github", "skills/.github"));
+    assert!(matches("skills/.git*", "skills/.github"));
+}
+
+// @spec SRC-PAT-004
+#[test]
+fn braces_expand_in_written_order() {
+    assert_eq!(
+        alternatives("a/{x,y}/{1,2}").unwrap(),
+        vec!["a/x/1", "a/x/2", "a/y/1", "a/y/2"]
+    );
+    assert_eq!(
+        alternatives("skills/{map-codebase,arrow-maintenance}").unwrap(),
+        vec!["skills/map-codebase", "skills/arrow-maintenance"]
+    );
+    assert_eq!(alternatives("skills/*").unwrap(), vec!["skills/*"]);
+}
+
+// @spec SRC-PAT-005
+#[test]
+fn malformed_braces_are_rejected() {
+    for bad in [
+        "a/{x",
+        "a/x}",
+        "a/{x}",
+        "a/{x,}",
+        "a/{,x}",
+        "a/{x,{y,z}}",
+        "a/{x/y,z}",
+    ] {
+        let e = err(&format!("https://h.example/o/r.git#:/{bad}"));
+        assert!(e.contains(bad), "{bad}: {e}");
+        assert!(alternatives(bad).is_err(), "{bad}");
+    }
 }

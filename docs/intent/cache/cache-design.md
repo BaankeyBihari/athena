@@ -28,6 +28,10 @@ Every remote source is fetched once into a shared cache, and installs copy out o
 3. If that fails (the server refuses fetching an unadvertised SHA), run a full fetch of all branches, unshallowing the repository if needed.
 4. If the commit is still missing, fail with "commit `<sha>` not found in `<url>`".
 
+### List folders at a commit
+
+`list_dirs(url, sha) -> Vec<String>`. Runs `git ls-tree -r -t <sha>` in the cache repository and returns the relative path of every tree entry (folder), sorted. The commit must be present (`ensure`); no checkout and no network access are needed. Used to expand subpath patterns.
+
 ### Export a tree
 
 `export(url, sha, subpath, staging_dir)`. Runs `git checkout --detach --force <sha>` in the cache repository, then copies `<repo>/<subpath>` (or the whole worktree) into `staging_dir`, excluding `.git`. Symlinks are copied as symlinks. A subpath that does not exist at that commit, or that names a file rather than a directory, is an error.

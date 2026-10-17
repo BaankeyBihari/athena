@@ -24,6 +24,10 @@ Design: `cache-design.md`
 - [x] **CACHE-EXP-001**: When exporting a remote entry, the system shall check out the commit detached in the cache repository and copy the subpath (or the whole worktree when no subpath is set) into the staging directory, excluding `.git` and copying symlinks as symlinks.
 - [x] **CACHE-EXP-002**: If an export's subpath does not exist at the commit, or names a file rather than a directory, then the system shall fail with an error naming the subpath and commit.
 
+## List
+
+- [x] **CACHE-LIST-001**: When listing folders for a commit that is present in the cache repository, the system shall return the relative path of every folder in that commit's tree, sorted, without checking out the commit and without network access.
+
 ## Failures
 
 - [x] **CACHE-ERR-001**: If the `git` executable is not found on `PATH`, then the system shall fail with an error stating that `git` is required.
