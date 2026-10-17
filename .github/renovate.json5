@@ -15,6 +15,11 @@
       automerge: true,
     },
     {
+      // Gives the community time to catch a compromised crate release before it lands here.
+      matchDatasources: ["crate"],
+      minimumReleaseAge: "3 days",
+    },
+    {
       // Reusable workflow: SLSA's builder identity check requires a tag ref, never a digest.
       matchPackageNames: ["slsa-framework/slsa-github-generator"],
       pinDigests: false,
