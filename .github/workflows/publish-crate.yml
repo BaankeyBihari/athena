@@ -37,7 +37,7 @@ jobs:
             exit 1
           fi
 
-      - uses: rust-lang/crates-io-auth-action@v1
+      - uses: rust-lang/crates-io-auth-action@v1.0.5
         id: auth
         if: env.HAS_TOKEN != 'true'
 
