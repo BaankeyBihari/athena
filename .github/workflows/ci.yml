@@ -1,0 +1,46 @@
+# Checks every push to main and every pull request. The job names are required status
+# checks in the main branch ruleset; rename them there too if they change.
+
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs the Rust toolchain and actionlint pinned in mise.toml.
+      - uses: jdx/mise-action@v5
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --check
+      - run: mise run lint
+      - run: actionlint
+      - run: cargo publish --dry-run --locked
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v5
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --locked
