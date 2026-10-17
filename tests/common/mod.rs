@@ -219,11 +219,20 @@ impl Sandbox {
     /// Runs athena under a pseudo-terminal (via `script`), typing `answer` and a newline.
     pub fn athena_tty(&self, args: &[&str], answer: &str) -> Run {
         let bin = env!("CARGO_BIN_EXE_athena");
-        let mut script_args = vec!["-q", "/dev/null", bin];
-        script_args.extend_from_slice(args);
         let base = self.command(&[]);
         let mut cmd = Command::new("script");
-        cmd.args(&script_args).current_dir(&self.project);
+        if cfg!(target_os = "linux") {
+            // util-linux script takes the command as a single shell string.
+            let line = std::iter::once(bin)
+                .chain(args.iter().copied())
+                .map(|a| format!("'{}'", a.replace('\'', r"'\''")))
+                .collect::<Vec<_>>()
+                .join(" ");
+            cmd.args(["-qec", &line, "/dev/null"]);
+        } else {
+            cmd.args(["-q", "/dev/null", bin]).args(args);
+        }
+        cmd.current_dir(&self.project);
         for (k, v) in base.get_envs() {
             if let Some(v) = v {
                 cmd.env(k, v);
