@@ -1,0 +1,47 @@
+# Publishes athena-ai-manager to crates.io when a GitHub release is created.
+#
+# Authentication, in order of preference:
+# - Trusted publishing (no stored secret): configure it on crates.io under the crate's
+#   Settings → Trusted Publishing with repository BaankeyBihari/athena and workflow
+#   publish-crate.yml. crates.io only allows this once the crate exists.
+# - A CARGO_REGISTRY_TOKEN repository secret, used when present. Needed for the very
+#   first publish; delete it once trusted publishing is set up.
+
+name: Publish crate
+on:
+  release:
+    types: [created]
+
+permissions: read-all
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Trusted publishing exchanges this OIDC token for a crates.io token.
+    env:
+      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs the Rust toolchain pinned in mise.toml.
+      - uses: jdx/mise-action@v2
+
+      - name: Check release tag matches Cargo.toml version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "$TAG" != "v$version" ]; then
+            echo "Release tag $TAG does not match Cargo.toml version v$version" >&2
+            exit 1
+          fi
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+        if: env.HAS_TOKEN != 'true'
+
+      - name: Publish
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
