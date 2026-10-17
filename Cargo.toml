@@ -1,7 +1,23 @@
 [package]
-name = "athena"
+name = "athena-ai-manager"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.99"
+description = "Install, pin, and sync AI agent skills and plugins from git repositories"
+license = "MIT"
+repository = "https://github.com/BaankeyBihari/athena"
+homepage = "https://github.com/BaankeyBihari/athena"
+readme = "README.md"
+keywords = ["ai", "agents", "skills", "plugins", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [".github/", "docs/", "AGENTS.md", "CLAUDE.md", "mise.toml"]
+
+[lib]
+name = "athena"
+
+[[bin]]
+name = "athena"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }

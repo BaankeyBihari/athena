@@ -4,11 +4,16 @@ A Rust CLI that manages AI agent **skills** and **plugins** like pinned dependen
 
 ## Install
 
-Requires `git` on `PATH`. The project uses [mise](https://mise.jdx.dev) to pin the Rust toolchain.
+Requires `git` on `PATH`. The crate is `athena-ai-manager`; the command it installs is `athena`.
+
+```sh
+cargo install athena-ai-manager
+```
+
+From a checkout (the project uses [mise](https://mise.jdx.dev) to pin the Rust toolchain):
 
 ```sh
 mise install          # installs the pinned Rust toolchain
-mise run build        # cargo build
 cargo install --path .
 ```
 
