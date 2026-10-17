@@ -22,10 +22,10 @@ jobs:
     env:
       HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Installs the Rust toolchain pinned in mise.toml.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v5
 
       - name: Check release tag matches Cargo.toml version
         env:
