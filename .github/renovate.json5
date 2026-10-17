@@ -1,0 +1,23 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "schedule:weekly",
+    ":semanticCommits",
+  ],
+  lockFileMaintenance: { enabled: true, automerge: true },
+  packageRules: [
+    {
+      matchUpdateTypes: ["minor", "patch", "pin", "digest"],
+      groupName: "non-major dependencies",
+      groupSlug: "non-major",
+      automerge: true,
+    },
+    {
+      // Reusable workflow: SLSA's builder identity check requires a tag ref, never a digest.
+      matchPackageNames: ["slsa-framework/slsa-github-generator"],
+      pinDigests: false,
+    },
+  ],
+}
