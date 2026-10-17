@@ -6,6 +6,7 @@
 
 Pin them to exact commits, install them anywhere, and never lose a local edit.
 
+[![CI](https://github.com/BaankeyBihari/athena/actions/workflows/ci.yml/badge.svg)](https://github.com/BaankeyBihari/athena/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/athena-ai-manager.svg)](https://crates.io/crates/athena-ai-manager)
 [![downloads](https://img.shields.io/crates/d/athena-ai-manager.svg)](https://crates.io/crates/athena-ai-manager)
 [![license](https://img.shields.io/crates/l/athena-ai-manager.svg)](LICENSE)
