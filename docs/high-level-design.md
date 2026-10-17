@@ -78,7 +78,7 @@ Components and boundaries:
 | `commit = "HEAD"` or a branch | Resolved to a SHA when written to config | Store the symbolic ref and re-resolve on `sync` | Reproducibility: `sync` must produce the same files on every machine. `update` is the only command that moves a locked commit. |
 | Fetching a locked commit | `git fetch --depth 1 origin <sha>`, full fetch as fallback | `--depth 1` clone only | A shallow clone of the default branch cannot reach an older locked SHA. |
 | `type = "local"` | Files are copied; `update` is a no-op | Symlink | Symlinks make "dirty" and removal ambiguous and leak the source directory into the project. |
-| Skills vs plugins | Same machinery; differ only in default path | Separate install pipelines | The SRS defines no behavioral difference. |
+| Skills vs plugins | Same machinery; differ only in default path | Separate install pipelines | Both are directories of files copied from a source; nothing in installing them differs. |
 | Project tooling | `mise`: `mise.toml` pins the Rust toolchain and defines the `build`, `test`, `lint`, and `fmt` tasks | `rust-toolchain.toml` plus cargo aliases; `just` or `make` | One tool pins the toolchain and runs tasks, so contributors and agents use a single entry point (`mise run <task>`). |
 
 ## Success Metrics
@@ -89,4 +89,4 @@ Components and boundaries:
 
 ## References
 
-- `skill_and_plugin_manager_srs.md` — source requirements.
+- `docs/intent/` — component designs and their EARS specs.

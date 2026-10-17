@@ -72,7 +72,7 @@ Matches entry names against a glob (`*`, `?`) using `wildmatch`. For each match,
 | Decision | Chosen | Alternatives Considered | Rationale |
 |---|---|---|---|
 | Choosing skill vs plugin on `add` | `--plugin` flag, skill by default | Detect from repo contents (`SKILL.md`, `.claude-plugin/`); a required `--kind` | Detection depends on agent-specific layouts that vary between tools. Skills are the common case. |
-| `--force` on `add`, `remove`, `update` | Present | Only on `sync`, as the SRS lists | The refuse-over-proceed tenet makes every destructive command refuse on a dirty destination; each needs the same override. |
+| `--force` on `add`, `remove`, `update` | Present | Only on `sync` | The refuse-over-proceed tenet makes every destructive command refuse on a dirty destination; each needs the same override. |
 | `list` reads config only | No destination checks | Include status per entry | Keeps `list` instant and offline; `show` carries the status. |
 | Glob crate | `wildmatch` | `globset` | Names are matched one pattern at a time; `globset` sets add nothing here. |
 | Exit codes | 0 or 1 | Distinct codes per failure class | Agents read the JSON and stderr for detail; no consumer needs finer codes yet. |
@@ -83,4 +83,4 @@ None.
 
 ## References
 
-- `skill_and_plugin_manager_srs.md` §4
+- `docs/high-level-design.md`

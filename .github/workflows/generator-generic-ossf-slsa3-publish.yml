@@ -1,66 +1,80 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+# Builds athena release binaries and generates SLSA level 3 provenance for them.
+# The generator is an OpenSSF project: https://github.com/slsa-framework/slsa-github-generator.
+# Verify a download with https://github.com/slsa-framework/slsa-verifier:
+#   slsa-verifier verify-artifact athena-<target>.tar.gz \
+#     --provenance-path multiple.intoto.jsonl --source-uri github.com/BaankeyBihari/athena
 
-# This workflow lets you generate SLSA provenance file for your project.
-# The generation satisfies level 3 for the provenance requirements - see https://slsa.dev/spec/v0.1/requirements
-# The project is an initiative of the OpenSSF (openssf.org) and is developed at
-# https://github.com/slsa-framework/slsa-github-generator.
-# The provenance file can be verified using https://github.com/slsa-framework/slsa-verifier.
-# For more information about SLSA and how it improves the supply-chain, visit slsa.dev.
-
-name: SLSA generic generator
+name: Release binaries with SLSA provenance
 on:
   workflow_dispatch:
   release:
     types: [created]
 
+permissions: read-all
+
 jobs:
   build:
-    runs-on: ubuntu-latest
-    outputs:
-      digests: ${{ steps.hash.outputs.digests }}
-
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      # ========================================================
-      #
-      # Step 1: Build your artifacts.
-      #
-      # ========================================================
-      - name: Build artifacts
-        run: |
-            # These are some amazing artifacts.
-            echo "artifact1" > artifact1
-            echo "artifact2" > artifact2
+      # Installs the Rust toolchain pinned in mise.toml.
+      - uses: jdx/mise-action@v2
 
-      # ========================================================
-      #
-      # Step 2: Add a step to generate the provenance subjects
-      #         as shown below. Update the sha256 sum arguments
-      #         to include all binaries that you generate
-      #         provenance for.
-      #
-      # ========================================================
-      - name: Generate subject for provenance
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          mkdir dist
+          tar -czf "dist/athena-${{ matrix.target }}.tar.gz" -C target/release athena
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: athena-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  hash:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # To add the binaries to the release.
+    outputs:
+      digests: ${{ steps.hash.outputs.digests }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate subjects for provenance
         id: hash
+        working-directory: dist
         run: |
           set -euo pipefail
+          echo "digests=$(sha256sum athena-*.tar.gz | base64 -w0)" >> "${GITHUB_OUTPUT}"
 
-          # List the artifacts the provenance will refer to.
-          files=$(ls artifact*)
-          # Generate the subjects (base64 encoded).
-          echo "hashes=$(sha256sum $files | base64 -w0)" >> "${GITHUB_OUTPUT}"
+      - name: Upload binaries to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/athena-*.tar.gz --repo "${{ github.repository }}"
 
   provenance:
-    needs: [build]
+    needs: [hash]
     permissions:
       actions: read   # To read the workflow path.
       id-token: write # To sign the provenance.
-      contents: write # To add assets to a release.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.4.0
+      contents: write # To add the provenance to the release.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
-      base64-subjects: "${{ needs.build.outputs.digests }}"
-      upload-assets: true # Optional: Upload to a new release
+      base64-subjects: "${{ needs.hash.outputs.digests }}"
+      upload-assets: ${{ github.event_name == 'release' }}

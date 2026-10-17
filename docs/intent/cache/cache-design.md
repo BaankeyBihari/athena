@@ -55,4 +55,4 @@ Every remote source is fetched once into a shared cache, and installs copy out o
 
 ## References
 
-- `skill_and_plugin_manager_srs.md` §2.1, §6
+- `docs/high-level-design.md`

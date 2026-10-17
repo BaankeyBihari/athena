@@ -93,4 +93,4 @@ An `add` whose new path lies inside an existing entry's path is refused: a packa
 
 ## References
 
-- `skill_and_plugin_manager_srs.md` §4 (`sync` safety), §5.2
+- `docs/high-level-design.md`

@@ -87,8 +87,8 @@ All writes go through `toml_edit`, preserving comments, ordering, and formatting
 | Resolving XDG directories | Read `XDG_*` variables, fall back to `~/.config` and `~/.cache` | `directories` crate | On macOS the crate returns `~/Library/...`, contradicting the required `~/.config` and `~/.cache` locations. `std::env::home_dir` covers the rest. |
 | Nested entries | State error blocking `add`, `sync`, `update` | Allow and install in order | The parent's hash would always include the child's files, so the parent would always look modified. |
 | `ref` field | Optional field recording what `update` follows | Store only `commit` | Without it, a package added from `#dev` would silently switch to the default branch on `update`. |
-| Same path, identical entries | Allowed | Always an error | The SRS defines the conflict as differing versions; identical duplicates install the same files. |
-| Local entry overlapping a global path | Local `add`, `sync`, `update` are blocked until the user removes one side | Local wins with a `WARN` (SRS §5.3); global wins silently | Letting local write to a globally managed path would make the two configs fight over the same files, each seeing the other's install as a modification. Requiring the user to pick a side keeps every path with exactly one owner. |
+| Same path, identical entries | Allowed | Always an error | Identical duplicates install the same files, so nothing conflicts. |
+| Local entry overlapping a global path | Local `add`, `sync`, `update` are blocked until the user removes one side | Local wins with a `WARN`; global wins silently | Letting local write to a globally managed path would make the two configs fight over the same files, each seeing the other's install as a modification. Requiring the user to pick a side keeps every path with exactly one owner. |
 | Global commands and local configs | Global commands ignore local configs | Global commands also check the current directory's `athena.toml` | Global installs must not depend on which directory the command runs from; the block lives on the local side, which is the side that would write into another owner's path. |
 | Load errors vs state errors | Load errors fail every command; state errors block only `add`, `sync`, `update` | Every problem fatal on load | A fatal state error would also block `remove`, the command that resolves it. Load errors stay fatal because an unparseable file or an invalid path cannot be acted on safely. |
 | `remove` of an entry in a state error | Removes the config entry only | Delete the destination as usual | The destination may hold files owned by the other entry in the conflict, such as a global install under a local path. |
@@ -97,8 +97,8 @@ All writes go through `toml_edit`, preserving comments, ordering, and formatting
 ## Open Questions & Future Decisions
 
 ### Deferred
-1. Upward search for `athena.toml` from subdirectories, like `git`. The SRS fixes the active directory.
+1. Upward search for `athena.toml` from subdirectories, like `git`. Commands act on the active directory only.
 
 ## References
 
-- `skill_and_plugin_manager_srs.md` §2, §3, §5.1, §5.3
+- `docs/high-level-design.md`

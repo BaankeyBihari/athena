@@ -66,4 +66,4 @@ Anything else is an error naming the accepted forms.
 
 ## References
 
-- `skill_and_plugin_manager_srs.md` §6
+- `docs/high-level-design.md`
