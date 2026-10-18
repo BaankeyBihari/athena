@@ -2,6 +2,12 @@
 
 Notes for earlier versions are on the [releases page](https://github.com/BaankeyBihari/athena/releases).
 
+## [0.3.1](https://github.com/BaankeyBihari/athena/compare/v0.3.0...v0.3.1) - 2026-10-18
+
+### Other
+
+- automate releases with release-plz ([#8](https://github.com/BaankeyBihari/athena/pull/8))
+
 ## 0.3.0
 
 ### Breaking
