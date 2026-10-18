@@ -44,6 +44,12 @@ athena treats them like dependencies:
 
 athena needs `git` on your `PATH`. The crate is named `athena-ai-manager`; the command it installs is `athena`.
 
+**With Homebrew** (macOS on Apple Silicon, Linux x86_64)
+
+```sh
+brew install BaankeyBihari/tap/athena
+```
+
 **With Cargo**
 
 ```sh
