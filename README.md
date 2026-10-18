@@ -145,6 +145,9 @@ athena add 'https://github.com/modelcontextprotocol/servers.git#main:/src/postgr
 # A local directory
 athena add ./my-plugins/linter --plugin
 
+# One skill for every project, into Claude Code's skills folder (~/.claude/skills/memoir)
+athena add -g 'github.com:BaankeyBihari/memoir-skill#:/memoir' --path '~/.claude/skills'
+
 # Move entries to the latest commit of what they follow
 athena update map-codebase
 athena update --all
@@ -163,7 +166,7 @@ Every command works on one scope:
 | Scope | Config file | Install location |
 |---|---|---|
 | Local (default) | `./athena.toml` in the current directory | `./.agents/skills/<name>` and `./.agents/plugins/<name>`, or the entry's `path` |
-| Global (`-g` / `--global`) | `$XDG_CONFIG_HOME/athena/config.toml` (default `~/.config/athena/config.toml`) | The entry's `path`, which is required |
+| Global (`-g` / `--global`) | `$XDG_CONFIG_HOME/athena/config.toml` (default `~/.config/athena/config.toml`) | `<path>/<name>`, under the folder given to `add --path`, which is required |
 
 Remote repositories are cached in `$XDG_CACHE_HOME/athena/remotes/` (default `~/.cache/athena/remotes/`). The cache is disposable; delete it at any time.
 
@@ -171,7 +174,7 @@ Remote repositories are cached in `$XDG_CACHE_HOME/athena/remotes/` (default `~/
 
 | Command | What it does |
 |---|---|
-| `add <source> [--name N] [--path P] [--plugin] [--pin] [--no-skill-check] [-g] [--force]` | Creates new entries, installs them, and records them, all or nothing. A pattern source creates one entry per matched folder. Skills must have a `SKILL.md` at their root unless `--no-skill-check` is given. `--global` requires `--path`. |
+| `add <source> [--name N] [--path P] [--plugin] [--pin] [--no-skill-check] [-g] [--force]` | Creates new entries, installs them, and records them, all or nothing. A pattern source creates one entry per matched folder. Skills must have a `SKILL.md` at their root unless `--no-skill-check` is given. `--path P` is the folder to install into: each entry goes in `P/<name>`, using the last part of the name (set it with `--name`). `--global` requires `--path`. |
 | `sync [-g] [--force]` | Restores every entry to its locked commit. Never moves a commit. |
 | `update (<name> \| -a/--all) [-g] [--force]` | Refreshes entries to the latest commit of their `ref` (default `HEAD`), then installs them. `--all` syncs pinned entries without refreshing them. |
 | `pin <name> [-g]` / `unpin <name> [-g]` | Excludes an entry from `update --all` refreshes, or includes it again. |
@@ -190,7 +193,7 @@ Remote repositories are cached in `$XDG_CACHE_HOME/athena/remotes/` (default `~/
 | `/abs/path`, `./rel`, `../rel`, `~/path`, `file://…` | Local directory, copied on each `sync` |
 | `<source>#<ref>` | Branch, tag, or full commit SHA |
 | `<source>#<ref>:/sub/path`, `<source>#:/sub/path`, or `<source>#/sub/path` | Install only that subfolder (the last two use the default branch) |
-| `<source>#<ref>:/skills/*` | One entry per matching folder. `*` and `?` match within one path component and skip hidden folders; `{a,b}` picks alternatives. With a pattern, `--path` is the parent folder for every entry. |
+| `<source>#<ref>:/skills/*` | One entry per matching folder. `*` and `?` match within one path component and skip hidden folders; `{a,b}` picks alternatives. |
 
 ## Configuration
 
