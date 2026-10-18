@@ -1,0 +1,6 @@
+# Release pipeline: see the "Release pipeline" row in docs/high-level-design.md.
+[workspace]
+# Read the current version from v* tags; publish-crate.yml stays the only crates.io publisher.
+git_only = true
+# Release only when a release PR merges, not on every push to main.
+release_always = false

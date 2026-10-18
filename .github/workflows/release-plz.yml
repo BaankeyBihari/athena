@@ -1,0 +1,72 @@
+# Keeps a release PR open on main, and tags and creates the GitHub release when it merges.
+# The release then triggers publish-crate.yml and the SLSA workflow. Settings: release-plz.toml.
+#
+# Runs as a GitHub App, because events created with GITHUB_TOKEN trigger no workflows:
+# the release PR would get no CI and the release would start no publishing. Needs the
+# App's ID in the APP_ID variable and its private key in the APP_PRIVATE_KEY secret.
+
+name: Release-plz
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Tags and releases the commit when it is a merged release PR; otherwise does nothing.
+  release:
+    if: github.repository_owner == 'BaankeyBihari'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }} # actionlint 1.7.12 rejects the newer client-id input.
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write # To push the tag and create the release.
+          permission-pull-requests: read # To recognize a merged release PR.
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # release-plz reads the version from tags and the changelog from history.
+          persist-credentials: false
+
+      # Installs the Rust toolchain pinned in mise.toml.
+      - uses: jdx/mise-action@v5
+
+      - uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+  # Opens or updates the release PR.
+  release-pr:
+    if: github.repository_owner == 'BaankeyBihari'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }} # actionlint 1.7.12 rejects the newer client-id input.
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write # To push the release PR branch.
+          permission-pull-requests: write # To open and update the release PR.
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Installs the Rust toolchain pinned in mise.toml, for cargo-semver-checks.
+      - uses: jdx/mise-action@v5
+
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

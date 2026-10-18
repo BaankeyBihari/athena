@@ -78,3 +78,23 @@ jobs:
     with:
       base64-subjects: "${{ needs.hash.outputs.digests }}"
       upload-assets: ${{ github.event_name == 'release' }}
+
+  # The tap skips a release whose binaries or provenance are missing, so this waits for both.
+  notify-tap:
+    needs: [provenance]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      # Runs as the release-plz GitHub App; see release-plz.yml.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }} # actionlint 1.7.12 rejects the newer client-id input.
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: homebrew-tap
+          permission-contents: write # To send a repository_dispatch.
+
+      - name: Start the Homebrew tap's formula update
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh api repos/BaankeyBihari/homebrew-tap/dispatches -f event_type=athena-release
