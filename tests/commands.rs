@@ -161,7 +161,7 @@ fn add_records_a_remote_entry() {
     );
 }
 
-// @spec CMD-ADD-002, CMD-ADD-003, CMD-ADD-006
+// @spec CMD-ADD-002, CMD-ADD-003, CMD-ADD-006, CMD-ADD-012
 #[test]
 fn add_with_fragment_plugin_name_path_and_pin() {
     let sb = Sandbox::new();
@@ -187,7 +187,7 @@ fn add_with_fragment_plugin_name_path_and_pin() {
         "--name",
         "mcp-postgres",
         "--path",
-        "./.custom/pg",
+        "./.custom/",
         "--pin",
     ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
@@ -203,7 +203,7 @@ fn add_with_fragment_plugin_name_path_and_pin() {
     );
     assert_eq!(
         field(&doc, "plugins", "mcp-postgres", "path").as_deref(),
-        Some("./.custom/pg")
+        Some("./.custom/mcp-postgres")
     );
     assert_eq!(
         field(&doc, "plugins", "mcp-postgres", "pinned").as_deref(),
@@ -211,10 +211,10 @@ fn add_with_fragment_plugin_name_path_and_pin() {
     );
     assert!(doc.get("skills").is_none());
     assert_eq!(
-        fs::read_to_string(sb.project.join(".custom/pg/plugin.json")).unwrap(),
+        fs::read_to_string(sb.project.join(".custom/mcp-postgres/plugin.json")).unwrap(),
         "{\"dev\":1}"
     );
-    assert!(!sb.project.join(".custom/pg/README.md").exists());
+    assert!(!sb.project.join(".custom/mcp-postgres/README.md").exists());
 }
 
 // @spec CMD-ADD-006
@@ -256,7 +256,7 @@ fn add_local_source() {
 fn global_add_creates_global_config_and_dirs() {
     let sb = Sandbox::new();
     sb.repo("org/a", &[("SKILL.md", "v1")]);
-    let r = sb.athena(&["add", &sb.url("org/a"), "-g", "--path", "~/agent-skills/a"]);
+    let r = sb.athena(&["add", &sb.url("org/a"), "-g", "--path", "~/agent-skills"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(
         field(&sb.global_doc(), "skills", "org/a", "path").as_deref(),
@@ -264,6 +264,74 @@ fn global_add_creates_global_config_and_dirs() {
     );
     assert!(sb.home.join("agent-skills/a/SKILL.md").exists());
     assert!(!sb.local_file().exists());
+}
+
+// @spec CMD-ADD-012, CMD-ADD-006
+#[test]
+fn path_is_the_parent_folder_for_a_plain_source() {
+    let sb = Sandbox::new();
+    sb.repo("org/pack", &[("memoir/SKILL.md", "m")]);
+    let src = format!("{}#:/memoir", sb.url("org/pack"));
+    let r = sb.athena(&["add", &src, "-g", "--path", "~/skills/"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        field(&sb.global_doc(), "skills", "memoir", "path").as_deref(),
+        Some("~/skills/memoir")
+    );
+    assert!(sb.home.join("skills/memoir/SKILL.md").exists());
+}
+
+// @spec CMD-ADD-012
+#[test]
+fn path_takes_the_folder_name_from_the_last_component_of_the_name() {
+    let sb = Sandbox::new();
+    let src = sb.tmp.path().join("src");
+    write(&src.join("SKILL.md"), "s");
+    let r = sb.athena(&[
+        "add",
+        &src.display().to_string(),
+        "--name",
+        "team/memoir",
+        "--path",
+        "./tools",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        field(&sb.local_doc(), "skills", "team/memoir", "path").as_deref(),
+        Some("./tools/memoir")
+    );
+    assert!(sb.project.join("tools/memoir/SKILL.md").exists());
+}
+
+// @spec CMD-ADD-018
+#[test]
+fn names_whose_folder_escapes_the_parent_fail_before_any_network() {
+    let sb = Sandbox::new();
+    sb.repo("org/pack", &[("memoir/SKILL.md", "m")]);
+    let url = sb.url("org/pack");
+    for bad in ["..", ".", "team/..", "memoir/"] {
+        let r = sb.athena(&["add", &url, "--name", bad, "--path", "./tools"]);
+        assert_eq!(r.code, 1, "--name {bad}");
+        assert!(r.stderr.contains(&format!("`{bad}`")), "{}", r.stderr);
+    }
+    // A default name derived from the subpath is checked the same way.
+    let r = sb.athena(&["add", &format!("{url}#:/.")]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("`.`"), "{}", r.stderr);
+    assert!(!sb.cache_home.join("athena").exists());
+    assert!(!sb.local_file().exists());
+}
+
+// @spec CMD-ADD-019
+#[test]
+fn empty_path_fails_before_any_network() {
+    let sb = Sandbox::new();
+    sb.repo("org/a", &[("SKILL.md", "v1")]);
+    let r = sb.athena(&["add", &sb.url("org/a"), "-g", "--path", ""]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("--path"), "{}", r.stderr);
+    assert!(!sb.cache_home.join("athena").exists());
+    assert!(!sb.global_file().exists());
 }
 
 // @spec CMD-ADD-004
@@ -334,9 +402,12 @@ fn gobble_setup(sb: &Sandbox) {
     }
     let one = src.join("one").display().to_string();
     let two = src.join("two").display().to_string();
-    assert_eq!(sb.athena(&["add", &one, "--path", "./tools/one"]).code, 0);
     assert_eq!(
-        sb.athena(&["add", &two, "--path", "./tools/two", "--pin"])
+        sb.athena(&["add", &one, "--path", "./tools/parent"]).code,
+        0
+    );
+    assert_eq!(
+        sb.athena(&["add", &two, "--path", "./tools/parent", "--pin"])
             .code,
         0
     );
@@ -353,7 +424,7 @@ fn gobbling_without_a_terminal_is_refused() {
     assert_eq!(r.code, 1);
     assert!(r.stderr.contains("remove"), "{}", r.stderr);
     assert_eq!(sb.read_local(), before);
-    assert!(sb.project.join("tools/one/a.md").exists());
+    assert!(sb.project.join("tools/parent/one/a.md").exists());
 }
 
 // @spec INST-GOB-002
@@ -361,7 +432,7 @@ fn gobbling_without_a_terminal_is_refused() {
 fn gobbling_a_dirty_child_is_refused_without_prompt() {
     let sb = Sandbox::new();
     gobble_setup(&sb);
-    write(&sb.project.join("tools/one/a.md"), "edited");
+    write(&sb.project.join("tools/parent/one/a.md"), "edited");
     let before = sb.read_local();
     let parent = sb.tmp.path().join("srcs/parent").display().to_string();
     let r = sb.athena_tty(&["add", &parent, "--path", "./tools"], "y");
@@ -369,7 +440,7 @@ fn gobbling_a_dirty_child_is_refused_without_prompt() {
     assert!(!r.stdout.contains("[y/N]"), "must not prompt: {}", r.stdout);
     assert_eq!(sb.read_local(), before);
     assert_eq!(
-        fs::read_to_string(sb.project.join("tools/one/a.md")).unwrap(),
+        fs::read_to_string(sb.project.join("tools/parent/one/a.md")).unwrap(),
         "edited"
     );
 }
@@ -379,15 +450,15 @@ fn gobbling_a_dirty_child_is_refused_without_prompt() {
 fn gobbling_is_refused_when_parent_holds_other_files() {
     let sb = Sandbox::new();
     gobble_setup(&sb);
-    write(&sb.project.join("tools/user-notes.md"), "mine");
+    write(&sb.project.join("tools/parent/user-notes.md"), "mine");
     let before = sb.read_local();
     let parent = sb.tmp.path().join("srcs/parent").display().to_string();
     let r = sb.athena_tty(&["add", &parent, "--path", "./tools"], "y");
     assert_eq!(r.code, 1);
     assert!(!r.stdout.contains("[y/N]"), "must not prompt: {}", r.stdout);
     assert_eq!(sb.read_local(), before);
-    assert!(sb.project.join("tools/user-notes.md").exists());
-    assert!(sb.project.join("tools/one/a.md").exists());
+    assert!(sb.project.join("tools/parent/user-notes.md").exists());
+    assert!(sb.project.join("tools/parent/one/a.md").exists());
 }
 
 // @spec INST-GOB-003
@@ -422,8 +493,8 @@ fn confirmed_gobble_replaces_children_including_pinned() {
         "pinned child is gobbled too"
     );
     assert!(field(&doc, "skills", "parent", "type").is_some());
-    assert!(sb.project.join("tools/p.md").exists());
-    assert!(!sb.project.join("tools/one").exists());
+    assert!(sb.project.join("tools/parent/p.md").exists());
+    assert!(!sb.project.join("tools/parent/one").exists());
 }
 
 // @spec INST-GOB-006
@@ -433,7 +504,7 @@ fn add_inside_an_existing_entry_is_refused() {
     gobble_setup(&sb);
     let before = sb.read_local();
     let parent = sb.tmp.path().join("srcs/parent").display().to_string();
-    let r = sb.athena(&["add", &parent, "--path", "./tools/one/inner"]);
+    let r = sb.athena(&["add", &parent, "--path", "./tools/parent/one"]);
     assert_eq!(r.code, 1);
     assert!(r.stderr.contains("one"), "{}", r.stderr);
     assert_eq!(sb.read_local(), before);
@@ -1450,8 +1521,15 @@ fn pattern_batches_never_gobble() {
     let src = sb.tmp.path().join("tools-src");
     write(&src.join("SKILL.md"), "t");
     assert_eq!(
-        sb.athena(&["add", &src.display().to_string(), "--path", "./tools"])
-            .code,
+        sb.athena(&[
+            "add",
+            &src.display().to_string(),
+            "--name",
+            "tools",
+            "--path",
+            "."
+        ])
+        .code,
         0
     );
     let before = sb.read_local();
@@ -1497,10 +1575,10 @@ fn gobbled_children_survive_a_failed_parent_export() {
     );
     assert_eq!(r.code, 1);
     assert!(
-        sb.project.join("tools/one/a.md").exists(),
+        sb.project.join("tools/parent/one/a.md").exists(),
         "children are deleted only after the parent passes every check"
     );
-    assert!(sb.project.join("tools/two/b.md").exists());
+    assert!(sb.project.join("tools/parent/two/b.md").exists());
 }
 
 // @spec CMD-ADD-007
@@ -1675,4 +1753,222 @@ fn a_closed_stdout_does_not_abort_an_add() {
         field(&doc, "skills", "alpha", "hash").is_some()
             && field(&doc, "skills", "beta", "hash").is_some()
     );
+}
+
+// ---------- real repository layouts installed into ~/.claude/skills ----------
+//
+// Offline copies of the folder layouts of github.com/obra/superpowers,
+// github.com/jszmajda/lid, and github.com/BaankeyBihari/memoir-skill.
+
+fn superpowers(sb: &Sandbox) -> String {
+    sb.repo(
+        "obra/superpowers",
+        &[
+            ("README.md", "r"),
+            ("skills/brainstorming/SKILL.md", "brainstorming"),
+            ("skills/writing-plans/SKILL.md", "writing-plans"),
+            (
+                "skills/systematic-debugging/SKILL.md",
+                "systematic-debugging",
+            ),
+            ("skills/systematic-debugging/reference.md", "ref"),
+        ],
+    );
+    sb.url("obra/superpowers")
+}
+
+fn lid(sb: &Sandbox) -> String {
+    sb.repo(
+        "jszmajda/lid",
+        &[
+            ("README.md", "r"),
+            (
+                "plugins/linked-intent-dev/skills/linked-intent-dev/SKILL.md",
+                "linked-intent-dev",
+            ),
+            (
+                "plugins/linked-intent-dev/skills/update-lid/SKILL.md",
+                "update-lid",
+            ),
+            (
+                "plugins/arrow-maintenance/skills/map-codebase/SKILL.md",
+                "map-codebase",
+            ),
+        ],
+    );
+    sb.url("jszmajda/lid")
+}
+
+fn memoir(sb: &Sandbox) -> String {
+    sb.repo(
+        "BaankeyBihari/memoir-skill",
+        &[("README.md", "r"), ("memoir/SKILL.md", "memoir")],
+    );
+    sb.url("BaankeyBihari/memoir-skill")
+}
+
+/// `~/.claude/skills` holding one skill the user installed by hand, which athena must leave alone.
+fn claude_skills(sb: &Sandbox) -> std::path::PathBuf {
+    let dir = sb.home.join(".claude/skills");
+    write(&dir.join("archify/SKILL.md"), "mine");
+    dir
+}
+
+/// Asserts each named skill is installed at `~/.claude/skills/<name>` and recorded with that path,
+/// and that the hand-installed skill is untouched.
+fn assert_in_claude_skills(sb: &Sandbox, dir: &std::path::Path, names: &[&str]) {
+    let doc = sb.global_doc();
+    for name in names {
+        assert_eq!(
+            fs::read_to_string(dir.join(name).join("SKILL.md")).unwrap(),
+            *name
+        );
+        assert_eq!(
+            field(&doc, "skills", name, "path"),
+            Some(format!("~/.claude/skills/{name}"))
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("archify/SKILL.md")).unwrap(),
+        "mine"
+    );
+}
+
+// @spec CMD-ADD-012
+#[test]
+fn superpowers_single_skill_installs_into_claude_skills() {
+    let sb = Sandbox::new();
+    let dir = claude_skills(&sb);
+    let src = format!("{}#:/skills/brainstorming", superpowers(&sb));
+    let r = sb.athena(&["add", "-g", &src, "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert_in_claude_skills(&sb, &dir, &["brainstorming"]);
+}
+
+// @spec CMD-ADD-012, CMD-ADD-009
+#[test]
+fn superpowers_collection_installs_every_skill_into_claude_skills() {
+    let sb = Sandbox::new();
+    let dir = claude_skills(&sb);
+    let src = format!("{}#:/skills/*", superpowers(&sb));
+    let r = sb.athena(&["add", "-g", &src, "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert_in_claude_skills(
+        &sb,
+        &dir,
+        &["brainstorming", "writing-plans", "systematic-debugging"],
+    );
+    assert!(dir.join("systematic-debugging/reference.md").exists());
+}
+
+// @spec CMD-ADD-012, SRC-PAT-004
+#[test]
+fn superpowers_selected_skills_install_into_claude_skills() {
+    let sb = Sandbox::new();
+    let dir = claude_skills(&sb);
+    let src = format!(
+        "{}#:/skills/{{writing-plans,systematic-debugging}}",
+        superpowers(&sb)
+    );
+    let r = sb.athena(&["add", "-g", &src, "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert_in_claude_skills(&sb, &dir, &["writing-plans", "systematic-debugging"]);
+    assert!(!dir.join("brainstorming").exists());
+}
+
+// @spec CMD-SKILL-002
+#[test]
+fn superpowers_repository_root_suggests_the_skills_pattern() {
+    let sb = Sandbox::new();
+    let dir = claude_skills(&sb);
+    let base = superpowers(&sb);
+    let r = sb.athena(&["add", "-g", &base, "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains(&format!("{base}#:/skills/*")),
+        "{}",
+        r.stderr
+    );
+    assert!(!sb.global_file().exists());
+    assert!(!dir.join("superpowers").exists());
+    assert!(dir.join("archify/SKILL.md").exists());
+}
+
+// @spec CMD-ADD-012
+#[test]
+fn lid_single_nested_skill_installs_into_claude_skills() {
+    let sb = Sandbox::new();
+    let dir = claude_skills(&sb);
+    let src = format!(
+        "{}#:/plugins/linked-intent-dev/skills/linked-intent-dev",
+        lid(&sb)
+    );
+    let r = sb.athena(&["add", "-g", &src, "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert_in_claude_skills(&sb, &dir, &["linked-intent-dev"]);
+}
+
+// @spec CMD-ADD-012, CMD-ADD-009, CMD-ADD-016
+#[test]
+fn lid_skills_of_one_plugin_then_of_every_plugin_install_into_claude_skills() {
+    let sb = Sandbox::new();
+    let dir = claude_skills(&sb);
+    let base = lid(&sb);
+    let one = format!("{base}#:/plugins/linked-intent-dev/skills/*");
+    let r = sb.athena(&["add", "-g", &one, "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert_in_claude_skills(&sb, &dir, &["linked-intent-dev", "update-lid"]);
+
+    let every = format!("{base}#:/plugins/*/skills/*");
+    let r = sb.athena(&["add", "-g", &every, "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains("already added"), "{}", r.stdout);
+    assert_in_claude_skills(
+        &sb,
+        &dir,
+        &["linked-intent-dev", "update-lid", "map-codebase"],
+    );
+}
+
+// @spec CMD-SKILL-003
+#[test]
+fn lid_repository_root_lists_where_its_skills_are() {
+    let sb = Sandbox::new();
+    let dir = claude_skills(&sb);
+    let r = sb.athena(&["add", "-g", &lid(&sb), "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr
+            .contains("plugins/linked-intent-dev/skills/update-lid/SKILL.md"),
+        "{}",
+        r.stderr
+    );
+    assert!(!sb.global_file().exists());
+    assert!(!dir.join("lid").exists());
+}
+
+// @spec CMD-ADD-012
+#[test]
+fn memoir_installs_into_claude_skills_with_either_subpath_form() {
+    for fragment in ["#:/memoir", "#/memoir"] {
+        let sb = Sandbox::new();
+        let dir = claude_skills(&sb);
+        let src = format!("{}{fragment}", memoir(&sb));
+        let r = sb.athena(&["add", "-g", &src, "--path", "~/.claude/skills/"]);
+        assert_eq!(r.code, 0, "{fragment}: {}\n{}", r.stdout, r.stderr);
+        assert_in_claude_skills(&sb, &dir, &["memoir"]);
+    }
+}
+
+// @spec CMD-SKILL-002
+#[test]
+fn memoir_repository_root_suggests_the_top_level_pattern() {
+    let sb = Sandbox::new();
+    let dir = claude_skills(&sb);
+    let base = memoir(&sb);
+    let r = sb.athena(&["add", "-g", &base, "--path", "~/.claude/skills"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains(&format!("{base}#:/*")), "{}", r.stderr);
+    assert!(!sb.global_file().exists());
+    assert!(!dir.join("memoir").exists());
 }

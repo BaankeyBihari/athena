@@ -40,8 +40,10 @@ enum Cmd {
     /// Add a new entry and install it
     Add {
         source: String,
+        /// Entry name; its last component names the installed folder
         #[arg(long)]
         name: Option<String>,
+        /// Folder to install into; each entry goes in <PATH>/<name>
         #[arg(long)]
         path: Option<String>,
         /// Record the entry under [plugins] instead of [skills]
@@ -560,7 +562,7 @@ impl Ctx {
         Ok(ok)
     }
 
-    // @spec CMD-ADD-001, CMD-ADD-002, CMD-ADD-003, CMD-ADD-004, CMD-ADD-005, CMD-ADD-006, CMD-ADD-007, CMD-ADD-011, CMD-ADD-012, CMD-ADD-013, CMD-ADD-015, CMD-ADD-016, CMD-ADD-017, CFG-CONF-002, INST-GOB-003, INST-GOB-004, INST-GOB-005
+    // @spec CMD-ADD-001, CMD-ADD-002, CMD-ADD-003, CMD-ADD-004, CMD-ADD-005, CMD-ADD-006, CMD-ADD-007, CMD-ADD-011, CMD-ADD-012, CMD-ADD-013, CMD-ADD-015, CMD-ADD-016, CMD-ADD-017, CMD-ADD-018, CMD-ADD-019, CFG-CONF-002, INST-GOB-003, INST-GOB-004, INST-GOB-005
     #[allow(clippy::too_many_arguments)]
     fn add(
         &self,
@@ -574,6 +576,9 @@ impl Ctx {
     ) -> Result<bool, String> {
         if self.scope == Scope::Global && path.is_none() {
             return Err("`--path` is required with `--global`".into());
+        }
+        if path.as_deref() == Some("") {
+            return Err("`--path` must not be empty".into());
         }
         let parsed = source::parse(input, &self.env.cwd, &self.env.home)?;
         let pattern = parsed.subpath.clone().filter(|s| source::is_pattern(s));
@@ -589,6 +594,11 @@ impl Ctx {
             if single_name.is_empty() {
                 return Err(format!(
                     "cannot derive a name from `{input}`; pass `--name`"
+                ));
+            }
+            if matches!(source::last(&single_name), "" | "." | "..") {
+                return Err(format!(
+                    "name `{single_name}` cannot name a folder; pass a `--name` ending in a folder name"
                 ));
             }
             if cfg.get(&single_name).is_some() {
@@ -623,16 +633,13 @@ impl Ctx {
         let mut entries: Vec<Entry> = Vec::new();
         for subpath in subpaths {
             // @spec SRC-NAME-004
-            let (name, path) = match (&pattern, &subpath) {
-                (Some(_), Some(sub)) => {
-                    let n = sub.rsplit('/').next().unwrap_or(sub).to_string();
-                    let p = path
-                        .as_ref()
-                        .map(|p| format!("{}/{n}", p.trim_end_matches('/')));
-                    (n, p)
-                }
-                _ => (single_name.clone(), path.clone()),
+            let name = match (&pattern, &subpath) {
+                (Some(_), Some(sub)) => source::last(sub).to_string(),
+                _ => single_name.clone(),
             };
+            let path = path
+                .as_ref()
+                .map(|p| format!("{}/{}", p.trim_end_matches('/'), source::last(&name)));
             let entry = Entry {
                 resolved: cfg.resolve_path(kind, &name, path.as_deref(), &self.env)?,
                 name,

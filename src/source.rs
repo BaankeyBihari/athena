@@ -120,7 +120,7 @@ fn url_path(url: &str) -> &str {
     }
 }
 
-fn last(path: &str) -> &str {
+pub fn last(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
