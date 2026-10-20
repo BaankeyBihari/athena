@@ -20,19 +20,23 @@ The TOML files are the declared state of every install. This component locates, 
 [core]                                   # local only, optional
 default_skill_path = "./.agents/skills"  # default when absent
 default_plugin_path = "./.agents/plugins"
+default_rule_path = "./.claude/rules"
+default_agent_path = "./.claude/agents"
 
-[skills."<name>"]       # or [plugins."<name>"]
+[skills."<name>"]       # or [plugins."<name>"], [rules."<name>"], [agents."<name>"]
 type = "remote"         # required: "remote" | "local"
 source = "<url or path>"  # required
 commit = "<40-hex SHA or ref>"  # required for remote, forbidden for local
 ref = "main"            # optional, remote only: what `update` follows (default HEAD)
-subpath = "src/x"       # optional
+subpath = "src/x"       # optional; required for remote rules and agents
 path = "./custom/dir"   # optional locally, required globally
 pinned = true           # optional, default false: `update --all` syncs but does not refresh it
 hash = "sha256:<hex>"   # written only by athena
 ```
 
-Unknown keys are errors. A name may appear in only one of `[skills]` and `[plugins]` within a scope.
+Unknown keys are errors. A name may appear in only one of `[skills]`, `[plugins]`, `[rules]`, and `[agents]` within a scope.
+
+**Entry shape.** Skills and plugins install a directory. Rules and agents install one file: their `subpath` names a file (never a pattern, which is expanded on `add`), and their destination is that file. A remote rule or agent without `subpath` is a load error. A local one may omit `subpath` when `source` itself is a file. Names of rules and agents keep the file extension (`style.md`), because the destination file name is the last component of the name and Claude Code loads only `.md` files.
 
 `commit` holding a 40-hex string is a locked commit. Any other value (`HEAD`, a branch) is an unresolved ref: `sync` resolves it to a SHA, writes the SHA to `commit`, and writes the original value to `ref` when `ref` is absent, so `update` keeps following it. The lock is written even when the entry's install is then skipped or fails, because resolving the ref is independent of the destination.
 
@@ -43,7 +47,7 @@ Unknown keys are errors. A name may appear in only one of `[skills]` and `[plugi
 Every entry resolves to one absolute destination path:
 
 - Local entry with `path`: relative to the directory holding `athena.toml`.
-- Local entry without `path`: `<default_skill_path or default_plugin_path>/<last component of name>`.
+- Local entry without `path`: `<default path of its kind>/<last component of name>`, where the default path is `default_skill_path`, `default_plugin_path`, `default_rule_path`, or `default_agent_path`.
 - Global entry: `path` must be absolute or start with `~`; relative paths are errors.
 - `~` expands to the home directory everywhere.
 - Paths are normalized lexically (`.` removed, `..` collapsed). They are not canonicalized through the filesystem, because destinations may not exist yet.
@@ -84,6 +88,8 @@ All writes go through `toml_edit`, preserving comments, ordering, and formatting
 | Decision | Chosen | Alternatives Considered | Rationale |
 |---|---|---|---|
 | Default install directory name | Last component of the entry name | Full name as nested path (`obra/superpowers`) | Agent skill directories are flat; `.agents/skills/superpowers` is what agents load. Two names sharing a last component collide and are caught by the collision rule. |
+| Names across kind tables | One name per scope across `[skills]`, `[plugins]`, `[rules]`, and `[agents]` | Names unique per table | `remove`, `show`, `pin`, `unpin`, and `update` take a bare name; per-table names would need a `--kind` on each of them. A clash is rare because agents are named by role and rules by topic, and `--name` resolves it. |
+| Default rule and agent paths | `./.claude/rules`, `./.claude/agents` | `./.agents/rules` and `./.agents/agents`, to match the skill and plugin defaults | Claude Code reads rules and agents only from `.claude/`; an `.agents/` default would install files no agent loads. |
 | Resolving XDG directories | Read `XDG_*` variables, fall back to `~/.config` and `~/.cache` | `directories` crate | On macOS the crate returns `~/Library/...`, contradicting the required `~/.config` and `~/.cache` locations. `std::env::home_dir` covers the rest. |
 | Nested entries | State error blocking `add`, `sync`, `update` | Allow and install in order | The parent's hash would always include the child's files, so the parent would always look modified. |
 | `ref` field | Optional field recording what `update` follows | Store only `commit` | Without it, a package added from `#dev` would silently switch to the default branch on `update`. |
