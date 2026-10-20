@@ -23,14 +23,16 @@ Each one runs the config state check for its scope first and exits before any fe
 
 ## Commands
 
-### `add <source> [--name <n>] [--path <p>] [--plugin] [--pin] [--no-skill-check] [--global/-g] [--force]`
+### `add <source> [--kind <k>] [--name <n>] [--path <p>] [--pin] [--no-skill-check] [--global/-g] [--force]`
 
 `add` turns one source into one or more **new entries** and installs them as a single all-or-nothing batch.
 
-1. `--global` without `--path` is an error, raised before any network access. So is an empty `--path`, and a plain source whose name (`--name` or the default name) has a last component that is empty, `.`, or `..`: the entry's folder is named after that component, and such a folder would be the parent itself or lie outside it. Pattern matches are named after real folders, so they never have such names.
-2. Parse `<source>` (`source`). The entries are skills unless `--plugin` is given.
+`--kind` is one of `skill` (default), `plugin`, `rule`, `agent`. `--plugin` is a deprecated alias for `--kind plugin`: it prints a `WARN` naming `--kind plugin` and behaves identically. Giving both `--plugin` and `--kind` is an error. `--no-skill-check` has an effect only for skills.
+
+1. `--global` without `--path` is an error, raised before any network access. So is an empty `--path`, and a plain source whose name (`--name` or the default name) has a last component that is empty, `.`, or `..`: the entry's folder is named after that component, and such a folder would be the parent itself or lie outside it. Pattern matches are named after real folders, so they never have such names. For rules and agents, a source that names no file is also an error, raised before any network access: a remote source needs a subpath, and a local source needs a subpath unless it is itself a file.
+2. Parse `<source>` (`source`). The entries are of the kind given by `--kind`.
 3. Run the config state check for the scope. For remote sources, resolve the fragment ref (default `HEAD`) to a SHA and ensure it is cached (`cache`).
-4. **Select subpaths.** A plain subpath (or none) selects itself. A pattern subpath is expanded against the folders at the commit (`cache` `list_dirs`) or, for local sources, the real folders under the source directory (symlinks to folders are not followed). Every brace alternative must match at least one folder, and the pattern as a whole must match at least one; otherwise the add fails naming what matched nothing.
+4. **Select subpaths.** A plain subpath (or none) selects itself. A pattern subpath is expanded against the folders at the commit (`cache` `list_dirs`) or, for local sources, the real folders under the source directory (symlinks to folders are not followed). For rules and agents the candidates are files instead (`cache` `list_files`; for local sources, the regular files under the source directory, symlinks not followed), and a plain subpath must name a file. Every brace alternative must match at least one folder, and the pattern as a whole must match at least one; otherwise the add fails naming what matched nothing.
 5. **Name and place each entry.** With a plain subpath, the name is `--name` or the default name. With a pattern, `--name` is an error (several entries cannot share one name), and each entry is named after its folder. `--path`, when given, is always the parent folder: each new entry is placed at `<path>/<last component of name>`, the same folder name the local default path uses (`config` § Path Resolution). Without `--path`, a local entry takes the default path. Two matches with the same name fail the add. A match whose name is already in the config is skipped and reported as `already added` when that entry has the same source, subpath, and path, so re-running a pattern picks up only new folders; any other name clash fails the add. `--pin` pins every new entry of the batch.
 6. **Check the batch.** Run the config state check with every new entry included. Nesting between one plain new entry and existing entries goes to gobbling (`install`); a pattern batch that nests with existing entries, or within itself, fails instead, suggesting the entry be added on its own.
 7. **Stage and verify every entry** before changing any destination: export into staging (`install`), then, for skills without `--no-skill-check`, require a `SKILL.md` at the root of the staged folder (see Skill Layout Check). Then plan each entry's install (`install`). If any entry would be skipped or refused, discard all staging and fail.
@@ -48,6 +50,10 @@ A skill's staged folder must contain a file named exactly `SKILL.md` (case-sensi
 When the `SKILL.md` files sit at different depths, no single pattern fits, and the error lists where they are instead. In a pattern batch every matched skill must pass; when some fail, the error names them and suggests braces (`{a,b}`) to select only the folders that are skills.
 
 The check runs only on `add`: `sync` and `update` act on entries that were already accepted, and plugins are never checked.
+
+#### File Kind Check
+
+Every file selected for a rule or an agent must be a regular file (a symlink is refused) with a name ending in `.md` (case-sensitive), and the entry's name must end in `.md` too, because the destination file is named after it and Claude Code loads no other file from those directories. A `--name` without the extension fails with a suggestion to add it (`--name reviewer.md`). When a file does not pass, `add` fails without installing anything and names the file; in a pattern batch it names every offender and suggests a narrower pattern such as `rules/*.md`. There is no override flag. The check runs on `add` only, like the skill layout check.
 
 ### `remove <name> [--global/-g] [--force]`
 
@@ -71,7 +77,7 @@ For each entry: resolve an unresolved `commit` to a SHA and write it back, ensur
 
 ### `list [--global/-g] [--json]`
 
-Table columns: name, kind (`skill`/`plugin`), type, commit (first 12 characters), path, source. Reads only the config: no network, no git, and no destination hashing.
+Table columns: name, kind (`skill`/`plugin`/`rule`/`agent`), type, commit (first 12 characters), path, source. Reads only the config: no network, no git, and no destination hashing.
 
 ### `show <pattern> [--global/-g] [--json]`
 
@@ -88,9 +94,12 @@ Matches entry names against a glob (`*`, `?`) using `wildmatch`. For each match,
 
 | Decision | Chosen | Alternatives Considered | Rationale |
 |---|---|---|---|
-| Choosing skill vs plugin on `add` | `--plugin` flag, skill by default | Detect from repo contents (`SKILL.md`, `.claude-plugin/`); a required `--kind` | Detection depends on agent-specific layouts that vary between tools. Skills are the common case. |
+| Choosing the kind on `add` | `--kind skill\|plugin\|rule\|agent`, skill by default; `--plugin` kept as a deprecated alias | Detect from repo contents (`SKILL.md`, `.claude-plugin/`); a flag per kind; dropping `--plugin` | Detection depends on agent-specific layouts that vary between tools. Skills are the common case. |
 | Pattern expansion | Expanded on `add` into concrete entries, installed all-or-nothing | Install the matches that work and report the rest | A partial batch leaves the user to work out which skills of a collection arrived; all-or-nothing keeps one `add` one outcome. |
 | Meaning of `add --path` | The parent folder for every source; the entry lands at `<path>/<last component of name>` and the config records that full path | The exact destination for plain sources and the parent only for patterns; "inside the folder if it exists, otherwise the folder itself" (as `cp -r` does); keep exact destinations and add a global `default_skill_path` | Users point `--path` at the folder their agent loads skills from (`~/.claude/skills`), as they would a copy target. One meaning for plain and pattern sources, matching how the local default path is built. Deciding by what exists on disk would make one command install to different places on different machines. `--name` sets the folder name when it should differ from the default. |
+| Symlinked rule or agent file | Refused | Follow the link; copy it as a symlink | Following lets a remote repository point a link at a file outside it (`~/.ssh/id_rsa`) and have it copied into the project. A copied relative link breaks once it sits in `.claude/rules/`. Pattern expansion already skips symlinks. |
+| Rule or agent name without `.md` | Fail on `add`, suggesting the name with `.md` | Append `.md` automatically; reject on config load | Appending makes the config name differ from what the user typed, so `remove reviewer` and `remove reviewer.md` would both look plausible. A load error would also block `remove`, which fixes the entry; hand-written entries are the user's call, as with `SKILL.md`. |
+| Non-`.md` rule or agent file | Fail with no override | Warn and install; reuse `--no-skill-check` | A mistyped pattern such as `rules/*` would put READMEs and scripts in a directory Claude Code reads. The loader accepts only `.md`, so an override would install files that never load. |
 | Missing `SKILL.md` | Fail, suggest a pattern or `--no-skill-check` | Warn and install | Installing a folder no agent loads is the more expensive mistake; the suggestion makes the fix one copy-paste. |
 | Skill check escape hatch | Dedicated `--no-skill-check` | Reuse `--force` | `--force` means "discard local modifications"; folding an unrelated check into it would make one flag do two dangerous things. |
 | `--force` on `add`, `remove`, `update` | Present | Only on `sync` | The refuse-over-proceed tenet makes every destructive command refuse on a dirty destination; each needs the same override. |

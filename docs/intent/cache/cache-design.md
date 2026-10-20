@@ -32,9 +32,15 @@ Every remote source is fetched once into a shared cache, and installs copy out o
 
 `list_dirs(url, sha) -> Vec<String>`. Runs `git ls-tree -r -t <sha>` in the cache repository and returns the relative path of every tree entry (folder), sorted. The commit must be present (`ensure`); no checkout and no network access are needed. Used to expand subpath patterns.
 
+### List files at a commit
+
+`list_files(url, sha) -> Vec<String>`. Runs `git ls-tree -r <sha>` in the cache repository and returns the relative path of every regular file (blob mode `100644` or `100755`), sorted. Symlinks and submodules are excluded. The commit must be present (`ensure`); no checkout and no network access are needed. Used to expand subpath patterns for rules and agents.
+
 ### Export a tree
 
 `export(url, sha, subpath, staging_dir)`. Runs `git checkout --detach --force <sha>` in the cache repository, then copies `<repo>/<subpath>` (or the whole worktree) into `staging_dir`, excluding `.git`. Symlinks are copied as symlinks. A subpath that does not exist at that commit, or that names a file rather than a directory, is an error.
+
+`export_file(url, sha, subpath, staging_path)` does the same checkout, then copies the single file `<repo>/<subpath>` to `staging_path`, keeping its executable bit. A subpath that does not exist at that commit, or that does not name a regular file, is an error.
 
 ## Failure Handling
 

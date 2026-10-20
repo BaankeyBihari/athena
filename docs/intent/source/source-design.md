@@ -44,10 +44,11 @@ Anything else is an error naming the accepted forms.
 - A fragment starting with `/` is a subpath with no ref: `#/plugins/x` means `#:/plugins/x`. Git forbids ref names starting with `/`, so this form is unambiguous. A fragment such as `#main/plugins/x` stays a ref, because `main/plugins/x` is a valid branch name.
 - The subpath has leading `/` removed. Empty subpaths, absolute paths remaining after stripping, and any `..` component are errors.
 - Local sources accept a subpath fragment (`/dir#:sub`) but not a ref; a ref on a local source is an error.
+- A local source path may name a file (`./rules/style.md`) when the entry is a rule or an agent. Parsing does not check this: the caller (`commands`) decides whether the path is a file or a folder.
 
 ## Subpath Patterns
 
-A subpath may be a **pattern** that selects several folders. `ParsedSource::subpath` then holds the pattern text unchanged, and `is_pattern(subpath)` reports whether it contains any of the pattern characters below.
+A subpath may be a **pattern** that selects several folders (several files, for rules and agents; the syntax and matching are the same, `rules/*.md` selecting the `.md` files directly under `rules`). `ParsedSource::subpath` then holds the pattern text unchanged, and `is_pattern(subpath)` reports whether it contains any of the pattern characters below.
 
 | Syntax | Matches |
 |---|---|
@@ -60,13 +61,14 @@ A subpath may be a **pattern** that selects several folders. `ParsedSource::subp
 - Braces do not nest. An unclosed `{`, a `}` without `{`, braces with fewer than two alternatives, an empty alternative, or an alternative containing `/` is an error naming the pattern.
 - `..` is rejected in patterns as in plain subpaths.
 
-Matching is pure. `alternatives(pattern)` expands the braces into one brace-free pattern per combination; `matches(pattern, dir)` tests one brace-free pattern against one folder path, component by component. The caller (`commands`) supplies the list of folders that exist at the commit, so this component still needs no git or filesystem access. A brace alternative that matches no folder is reported by name, so a typo such as `{arrow-maintainance,map-codebase}` fails instead of silently installing less.
+Matching is pure. `alternatives(pattern)` expands the braces into one brace-free pattern per combination; `matches(pattern, dir)` tests one brace-free pattern against one folder or file path, component by component. The caller (`commands`) supplies the list of folders (or files) that exist at the commit, so this component still needs no git or filesystem access. A brace alternative that matches no folder is reported by name, so a typo such as `{arrow-maintainance,map-codebase}` fails instead of silently installing less.
 
 ## Default Name
 
 - Remote with subpath: the last component of the subpath (`servers.git#:src/postgres` gives `postgres`).
 - Remote without subpath: the last two path components with `.git` removed (`github.com/obra/superpowers.git` gives `obra/superpowers`).
 - Local: the last component of the path (or of the subpath when present).
+- A file (rules and agents) is named after its file name including the extension (`rules/style.md` gives `style.md`). For a local source that is itself a file, the same.
 - Pattern subpath: each matched folder is named after its own last component (`skills/*` matching `skills/brainstorming` gives `brainstorming`).
 
 ## Decisions & Alternatives

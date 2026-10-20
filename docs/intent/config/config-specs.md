@@ -9,20 +9,22 @@ Design: `config-design.md`
 
 ## Schema
 
-- [x] **CFG-SCHEMA-001**: The system shall accept entries as tables `[skills."<name>"]` and `[plugins."<name>"]` with the keys `type`, `source`, `commit`, `ref`, `subpath`, `path`, `pinned`, and `hash`.
+- [x] **CFG-SCHEMA-001**: The system shall accept entries as tables `[skills."<name>"]`, `[plugins."<name>"]`, `[rules."<name>"]`, and `[agents."<name>"]` with the keys `type`, `source`, `commit`, `ref`, `subpath`, `path`, `pinned`, and `hash`.
 - [x] **CFG-SCHEMA-002**: If a config file (local or global) contains a key the schema does not define, then the system shall fail on load with an error naming the key and its table.
-- [x] **CFG-SCHEMA-003**: If one name appears under both `[skills]` and `[plugins]` in the same config file, then the system shall fail on load with an error naming it.
+- [x] **CFG-SCHEMA-003**: If one name appears under more than one of `[skills]`, `[plugins]`, `[rules]`, and `[agents]` in the same config file, then the system shall fail on load with an error naming it.
 - [x] **CFG-SCHEMA-004**: If an entry lacks `type` or `source`, or has a `type` other than `remote` or `local`, then the system shall fail on load with an error naming the entry.
 - [x] **CFG-SCHEMA-005**: If an entry with `type = "remote"` lacks `commit`, or an entry with `type = "local"` has `commit` or `ref`, then the system shall fail on load with an error naming the entry.
 - [x] **CFG-SCHEMA-006**: If the global config contains a `[core]` table, then the system shall fail on load with an error stating that `[core]` is local-only.
-- [x] **CFG-SCHEMA-007**: When the local config has no `[core]` table or omits a default path key, the system shall use `./.agents/skills` as `default_skill_path` and `./.agents/plugins` as `default_plugin_path`.
+- [x] **CFG-SCHEMA-007**: When the local config has no `[core]` table or omits a default path key, the system shall use `./.agents/skills` as `default_skill_path`, `./.agents/plugins` as `default_plugin_path`, `./.claude/rules` as `default_rule_path`, and `./.claude/agents` as `default_agent_path`.
 - [x] **CFG-SCHEMA-008**: When an entry's `commit` is a 40-character hexadecimal string, the system shall treat it as a locked commit; any other `commit` value shall be treated as an unresolved ref.
 - [x] **CFG-SCHEMA-009**: When an entry has no `pinned` key, the system shall treat the entry as not pinned.
+- [x] **CFG-SCHEMA-010**: When the local config's `[core]` table sets `default_rule_path` or `default_agent_path`, the system shall use that value in place of the built-in default, as it does for `default_skill_path` and `default_plugin_path`.
+- [x] **CFG-SCHEMA-011**: If a remote entry under `[rules]` or `[agents]` lacks `subpath`, then the system shall fail on load with an error naming the entry.
 
 ## Path Resolution
 
 - [x] **CFG-PATH-001**: When a local entry has `path`, the system shall resolve a relative `path` against the directory containing `athena.toml`.
-- [x] **CFG-PATH-002**: When a local entry has no `path`, the system shall resolve its destination to `<default_skill_path>/<last component of name>` for skills and `<default_plugin_path>/<last component of name>` for plugins, relative to the directory containing `athena.toml`.
+- [x] **CFG-PATH-002**: When a local entry has no `path`, the system shall resolve its destination to `<default path of its kind>/<last component of name>`, the default path being `default_skill_path`, `default_plugin_path`, `default_rule_path`, or `default_agent_path` for skills, plugins, rules, and agents respectively, relative to the directory containing `athena.toml`.
 - [x] **CFG-PATH-003**: If a global entry has no `path`, or a `path` that is neither absolute nor `~`-prefixed, then the system shall fail on load with an error naming the entry.
 - [x] **CFG-PATH-004**: When resolving any entry path (local or global), the system shall expand a leading `~` to the home directory and normalize the path lexically (removing `.` and collapsing `..`) without consulting the filesystem.
 - [x] **CFG-PATH-005**: If an entry's resolved path equals `/`, the home directory, or the directory containing its config file, is an ancestor of any of these, or lies inside the `athena` cache directory, then the system shall fail on load with an error naming the entry and path, for every command.

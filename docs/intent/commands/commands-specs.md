@@ -10,7 +10,7 @@ Design: `commands-design.md`
 ## add
 
 - [x] **CMD-ADD-001**: If `add` is given `--global` without `--path`, then the system shall exit with an error before any network access.
-- [x] **CMD-ADD-002**: When `add` runs, the system shall record the entry under `[plugins]` if `--plugin` is given and under `[skills]` otherwise.
+- [x] **CMD-ADD-002**: When `add` runs, the system shall record the entry under `[skills]` when no kind is given, and under `[skills]`, `[plugins]`, `[rules]`, or `[agents]` when `--kind` is `skill`, `plugin`, `rule`, or `agent` respectively.
 - [x] **CMD-ADD-003**: When `add` runs, the system shall name the entry with `--name` if given and with the source's default name otherwise.
 - [x] **CMD-ADD-004**: If the name chosen by `add` already exists in the selected config, then the system shall exit with an error suggesting `update`.
 - [x] **CMD-ADD-005**: When `add` runs with a remote source, the system shall resolve the fragment ref (or `HEAD` when none) to a commit SHA and record it in `commit`.
@@ -27,6 +27,20 @@ Design: `commands-design.md`
 - [x] **CMD-ADD-017**: When `add` is given `--pin` with a pattern source, the system shall set `pinned = true` on every new entry of the batch.
 - [x] **CMD-ADD-018**: If the name `add` chooses for a plain (non-pattern) source (CMD-ADD-003) has a last `/`-separated component that is empty, `.`, or `..`, then the system shall exit with an error naming the name before any network access.
 - [x] **CMD-ADD-019**: If `add` is given an empty `--path`, then the system shall exit with an error before any network access.
+- [x] **CMD-ADD-020**: If `add` is given a `--kind` value other than `skill`, `plugin`, `rule`, or `agent`, then the system shall exit with an error listing the accepted values, before any network access.
+- [x] **CMD-ADD-021**: When `add` is given `--plugin` without `--kind`, the system shall behave as for `--kind plugin` and print a `WARN` stating that `--plugin` is deprecated in favor of `--kind plugin`.
+- [x] **CMD-ADD-022**: If `add` is given both `--plugin` and `--kind`, then the system shall exit with an error before any network access.
+- [x] **CMD-ADD-023**: If `add` for a rule or an agent is given a remote source without a subpath, a local source that is a folder without a subpath, or a local source that is a file with a subpath, then the system shall exit with an error before any network access.
+- [x] **CMD-ADD-024**: When `add` runs for a rule or an agent, the system shall select files instead of folders: a plain subpath shall name a regular file at the resolved commit (remote) or under the source (local), and a pattern subpath (SRC-PAT-001) shall be expanded against the regular files at the commit (CACHE-LIST-002) or the real files under the source directory, not following symlinks, creating one new entry per matched file, in sorted order.
+- [x] **CMD-ADD-025**: When `add` names a rule or an agent entry, the system shall use the file name including its extension as the default name (SRC-NAME-005), and shall place the entry at `<path>/<leaf>` or the kind's default path as it does for folders.
+
+## File kind check
+
+- [x] **CMD-FILE-001**: If any file selected by `add` for a rule or an agent has a name not ending in `.md` (case-sensitive), then the system shall fail naming every such file, with no change to the config or any destination.
+- [x] **CMD-FILE-004**: If any file selected by `add` for a rule or an agent is a symlink, then the system shall fail naming every such file, with no change to the config or any destination.
+- [x] **CMD-FILE-005**: If `add` for a rule or an agent chooses an entry name whose last `/`-separated component does not end in `.md`, then the system shall fail naming it and suggesting the same name with `.md` appended, before any network access.
+- [x] **CMD-FILE-002**: When the file kind check fails for a pattern batch, the system shall suggest narrowing the pattern, for example `rules/*.md`.
+- [x] **CMD-FILE-003**: The system shall run the file kind check only in `add`, and shall offer no flag to skip it; `--no-skill-check` shall not affect it.
 
 ## Skill layout check
 
@@ -34,7 +48,7 @@ Design: `commands-design.md`
 - [x] **CMD-SKILL-002**: When the skill layout check fails for an entry whose staged folder holds `SKILL.md` files that all sit at `<dir>/<x>/SKILL.md` for a single `<dir>`, the system shall suggest the source as typed before `#`, followed by `#<ref>:/<subpath>/<dir>/*` (the user's ref, empty when none; `<dir>/*` when there was no subpath).
 - [x] **CMD-SKILL-003**: When the skill layout check fails and the staged folder holds `SKILL.md` files not covered by CMD-SKILL-002, the system shall list their relative paths.
 - [x] **CMD-SKILL-004**: When the skill layout check fails, the system shall state that `--no-skill-check` installs the folders as they are, and, for a pattern batch, suggest braces (`{a,b}`) to select only the folders that are skills.
-- [x] **CMD-SKILL-005**: The system shall run the skill layout check only in `add` for skill entries; `add --plugin`, `sync`, and `update` shall not run it.
+- [x] **CMD-SKILL-005**: The system shall run the skill layout check only in `add` for skill entries; `add` for plugins, rules, and agents, `sync`, and `update` shall not run it.
 
 ## remove
 
@@ -62,7 +76,7 @@ Design: `commands-design.md`
 
 ## list and show
 
-- [x] **CMD-LIST-001**: When `list` runs without `--json`, the system shall print a table with the columns name, kind (`skill` or `plugin`), type, commit (first 12 characters), path, and source.
+- [x] **CMD-LIST-001**: When `list` runs without `--json`, the system shall print a table with the columns name, kind (`skill`, `plugin`, `rule`, or `agent`), type, commit (first 12 characters), path, and source.
 - [x] **CMD-LIST-002**: When `list` runs, the system shall read only the config files, with no network access, no git invocation, and no destination hashing.
 - [x] **CMD-SHOW-001**: When `show <pattern>` runs, the system shall select entries whose names match the glob pattern, where `*` matches any run of characters and `?` matches one character.
 - [x] **CMD-SHOW-002**: When `show` prints a matching entry, the system shall include every config field, the resolved absolute path, and a status: `missing` when the destination does not exist, `modified` when the entry has a `hash` that differs from the destination's content hash, and `present` otherwise.
