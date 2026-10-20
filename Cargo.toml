@@ -1,6 +1,6 @@
 [package]
 name = "athena-ai-manager"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.99"
 description = "Install, pin, and sync AI agent skills and plugins from git repositories"

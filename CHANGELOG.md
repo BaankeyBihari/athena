@@ -2,6 +2,16 @@
 
 Notes for earlier versions are on the [releases page](https://github.com/BaankeyBihari/athena/releases).
 
+## [0.4.0](https://github.com/BaankeyBihari/athena/compare/v0.3.1...v0.4.0) - 2026-10-20
+
+### Added
+
+- *(add)* install rules and agents as single files with --kind
+
+### Other
+
+- ignore memoir session files
+
 ## [0.3.1](https://github.com/BaankeyBihari/athena/compare/v0.3.0...v0.3.1) - 2026-10-18
 
 ### Other
