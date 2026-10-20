@@ -35,6 +35,14 @@ struct Cli {
     command: Cmd,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum KindArg {
+    Skill,
+    Plugin,
+    Rule,
+    Agent,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// Add a new entry and install it
@@ -46,8 +54,11 @@ enum Cmd {
         /// Folder to install into; each entry goes in <PATH>/<name>
         #[arg(long)]
         path: Option<String>,
-        /// Record the entry under [plugins] instead of [skills]
-        #[arg(long)]
+        /// What the source is: skill (default), plugin, rule, or agent
+        #[arg(long, value_enum)]
+        kind: Option<KindArg>,
+        /// Deprecated alias for `--kind plugin`
+        #[arg(long, conflicts_with = "kind")]
         plugin: bool,
         /// Exclude the entry from `update --all` refreshes
         #[arg(long)]
@@ -147,6 +158,7 @@ fn run(cmd: Cmd) -> Result<bool, String> {
             source,
             name,
             path,
+            kind,
             plugin,
             pin,
             no_skill_check,
@@ -156,7 +168,17 @@ fn run(cmd: Cmd) -> Result<bool, String> {
             &source,
             name,
             path,
-            if plugin { Kind::Plugin } else { Kind::Skill },
+            match (kind, plugin) {
+                (Some(KindArg::Plugin), _) => Kind::Plugin,
+                (Some(KindArg::Rule), _) => Kind::Rule,
+                (Some(KindArg::Agent), _) => Kind::Agent,
+                (_, true) => {
+                    // @spec CMD-ADD-021
+                    warn("`--plugin` is deprecated; use `--kind plugin`");
+                    Kind::Plugin
+                }
+                _ => Kind::Skill,
+            },
             pin,
             force,
             !no_skill_check,
@@ -334,20 +356,38 @@ impl Ctx {
     }
 
     /// Exports the entry's content into a staging directory beside its destination; returns it and its hash.
-    // @spec INST-OBS-001, INST-OBS-002, INST-OBS-003
+    // @spec INST-OBS-001, INST-OBS-002, INST-OBS-003, INST-OBS-004, INST-OBS-005, INST-OBS-006
     fn stage(&self, entry: &Entry, sha: Option<&str>) -> Result<(PathBuf, String), String> {
         let parent = entry.resolved.parent().unwrap_or(Path::new("/"));
         fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create `{}`: {e}", parent.display()))?;
         let staging = install::staging_dir(&entry.resolved);
+        let file = entry.kind.is_file();
         let exported = match (entry.source_type, sha) {
+            (SourceType::Remote, Some(sha)) if file => {
+                let sub = entry.subpath.as_deref().unwrap_or_default();
+                self.cache.export_file(&entry.source, sha, sub, &staging)
+            }
             (SourceType::Remote, Some(sha)) => {
                 self.cache
                     .export(&entry.source, sha, entry.subpath.as_deref(), &staging)
             }
             _ => {
                 let src = self.local_source(entry);
-                if src.is_dir() {
+                if file {
+                    match fs::symlink_metadata(&src) {
+                        Ok(m) if m.is_file() => fs::copy(&src, &staging)
+                            .map(|_| ())
+                            .map_err(|e| format!("cannot copy `{}`: {e}", src.display())),
+                        Ok(m) if m.file_type().is_symlink() => {
+                            Err(format!("local source `{}` is a symlink", src.display()))
+                        }
+                        _ => Err(format!(
+                            "local source `{}` does not exist or is not a regular file",
+                            src.display()
+                        )),
+                    }
+                } else if src.is_dir() {
                     install::copy_tree(&src, &staging)
                 } else {
                     Err(format!(
@@ -357,10 +397,17 @@ impl Ctx {
                 }
             }
         };
-        match exported.and_then(|_| install::hash_dir(&staging)) {
+        let hashed = exported.and_then(|_| {
+            if file {
+                install::hash_file(&staging)
+            } else {
+                install::hash_dir(&staging)
+            }
+        });
+        match hashed {
             Ok(hash) => Ok((staging, hash)),
             Err(e) => {
-                let _ = fs::remove_dir_all(&staging);
+                install::remove_any(&staging);
                 Err(e)
             }
         }
@@ -393,10 +440,10 @@ impl Ctx {
         dest: Option<Dest>,
     ) -> Result<Prepared, String> {
         let (staging, target_hash) = self.stage(entry, sha)?;
-        let dest = match dest.map_or_else(|| install::observe_dest(&entry.resolved), Ok) {
+        let dest = match dest.map_or_else(|| observe(entry), Ok) {
             Ok(d) => d,
             Err(e) => {
-                let _ = fs::remove_dir_all(&staging);
+                install::remove_any(&staging);
                 return Err(e);
             }
         };
@@ -419,7 +466,7 @@ impl Ctx {
     // @spec INST-APPLY-003
     fn finish(entry: &Entry, p: Prepared) -> Outcome {
         let discard = || {
-            let _ = fs::remove_dir_all(&p.staging);
+            install::remove_any(&p.staging);
         };
         match p.action {
             Action::UpToDate { record_hash } => {
@@ -562,7 +609,7 @@ impl Ctx {
         Ok(ok)
     }
 
-    // @spec CMD-ADD-001, CMD-ADD-002, CMD-ADD-003, CMD-ADD-004, CMD-ADD-005, CMD-ADD-006, CMD-ADD-007, CMD-ADD-011, CMD-ADD-012, CMD-ADD-013, CMD-ADD-015, CMD-ADD-016, CMD-ADD-017, CMD-ADD-018, CMD-ADD-019, CFG-CONF-002, INST-GOB-003, INST-GOB-004, INST-GOB-005
+    // @spec CMD-ADD-001, CMD-ADD-002, CMD-ADD-003, CMD-ADD-004, CMD-ADD-005, CMD-ADD-006, CMD-ADD-007, CMD-ADD-011, CMD-ADD-012, CMD-ADD-013, CMD-ADD-015, CMD-ADD-016, CMD-ADD-017, CMD-ADD-018, CMD-ADD-019, CMD-ADD-020, CMD-ADD-022, CMD-ADD-025, CMD-FILE-005, CMD-SKILL-005, CFG-CONF-002, INST-GOB-003, INST-GOB-004, INST-GOB-005
     #[allow(clippy::too_many_arguments)]
     fn add(
         &self,
@@ -588,6 +635,9 @@ impl Ctx {
                     .into(),
             );
         }
+        if kind.is_file() {
+            Self::check_file_source(&parsed, pattern.is_some())?;
+        }
         let cfg = self.load(false)?;
         let single_name = name.unwrap_or(parsed.default_name.clone());
         if pattern.is_none() {
@@ -599,6 +649,12 @@ impl Ctx {
             if matches!(source::last(&single_name), "" | "." | "..") {
                 return Err(format!(
                     "name `{single_name}` cannot name a folder; pass a `--name` ending in a folder name"
+                ));
+            }
+            if kind.is_file() && !is_markdown(source::last(&single_name)) {
+                return Err(format!(
+                    "{} name `{single_name}` must end in `.md`; pass `--name {single_name}.md`",
+                    kind.label()
                 ));
             }
             if cfg.get(&single_name).is_some() {
@@ -624,11 +680,30 @@ impl Ctx {
         let subpaths = match &pattern {
             None => vec![parsed.subpath.clone()],
             Some(p) => self
-                .expand(p, source_type, &source, sha.as_deref())?
+                .expand(p, kind, source_type, &source, sha.as_deref())?
                 .into_iter()
                 .map(Some)
                 .collect(),
         };
+        // @spec CMD-FILE-001, CMD-FILE-002
+        if kind.is_file() && pattern.is_some() {
+            let bad: Vec<String> = subpaths
+                .iter()
+                .flatten()
+                .filter(|s| !is_markdown(source::last(s)))
+                .map(|s| format!("`{s}`"))
+                .collect();
+            if !bad.is_empty() {
+                let narrower = match pattern.as_deref() {
+                    Some(p) if p.ends_with('*') => format!("{p}.md"),
+                    _ => "*.md".to_string(),
+                };
+                return Err(format!(
+                    "{} are not `.md` files; narrow the pattern, for example `{narrower}`",
+                    bad.join(", ")
+                ));
+            }
+        }
 
         let mut entries: Vec<Entry> = Vec::new();
         for subpath in subpaths {
@@ -701,7 +776,7 @@ impl Ctx {
         let mut prepared: Vec<Prepared> = Vec::new();
         let discard = |prepared: &[Prepared]| {
             for p in prepared {
-                let _ = fs::remove_dir_all(&p.staging);
+                install::remove_any(&p.staging);
             }
         };
         for entry in &entries {
@@ -736,8 +811,7 @@ impl Ctx {
 
         for child in &children {
             if child.resolved.exists() {
-                fs::remove_dir_all(&child.resolved)
-                    .map_err(|e| format!("cannot remove `{}`: {e}", child.resolved.display()))?;
+                delete(child)?;
             }
         }
         let mut ed = Editor::open(&self.file())?;
@@ -765,20 +839,68 @@ impl Ctx {
         failure.map_or(Ok(true), Err)
     }
 
-    /// Folders a pattern selects at the commit (remote) or under the source directory (local).
-    // @spec CMD-ADD-009, CMD-ADD-010
+    /// Checks that a rule or agent source names exactly one `.md` file that is not a symlink,
+    /// or (with a pattern) a folder to select files from. Needs no network.
+    // @spec CMD-ADD-023, CMD-FILE-001, CMD-FILE-004
+    fn check_file_source(parsed: &source::ParsedSource, pattern: bool) -> Result<(), String> {
+        let sub = parsed.subpath.as_deref();
+        let (leaf, target) = match &parsed.kind {
+            SourceKind::Remote { .. } => {
+                let sub = sub.ok_or("a rule or agent needs a subpath naming its file")?;
+                (source::last(sub).to_string(), None)
+            }
+            SourceKind::Local { path } if path.is_file() => {
+                if sub.is_some() {
+                    return Err(format!("`{}` is a file; drop the subpath", path.display()));
+                }
+                (
+                    source::last(&path.to_string_lossy()).to_string(),
+                    Some(path.clone()),
+                )
+            }
+            SourceKind::Local { path } => {
+                let sub = sub.ok_or_else(|| {
+                    format!(
+                        "`{}` is a folder; a rule or agent needs a subpath naming its file",
+                        path.display()
+                    )
+                })?;
+                (source::last(sub).to_string(), Some(path.join(sub)))
+            }
+        };
+        if pattern {
+            return Ok(());
+        }
+        if !is_markdown(&leaf) {
+            return Err(format!("`{leaf}` is not a `.md` file"));
+        }
+        if target.is_some_and(|t| fs::symlink_metadata(t).is_ok_and(|m| m.file_type().is_symlink()))
+        {
+            return Err(format!(
+                "`{leaf}` is a symlink; rules and agents must be regular files"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Folders (files, for rules and agents) a pattern selects at the commit (remote) or under the
+    /// source directory (local).
+    // @spec CMD-ADD-009, CMD-ADD-010, CMD-ADD-024
     fn expand(
         &self,
         pattern: &str,
+        kind: Kind,
         source_type: SourceType,
         source: &str,
         sha: Option<&str>,
     ) -> Result<Vec<String>, String> {
         let alts = source::alternatives(pattern)?;
         let depth = pattern.split('/').count();
+        let files = kind.is_file();
         let dirs = match (source_type, sha) {
+            (SourceType::Remote, Some(sha)) if files => self.cache.list_files(source, sha)?,
             (SourceType::Remote, Some(sha)) => self.cache.list_dirs(source, sha)?,
-            _ => local_dirs(Path::new(source), depth)?,
+            _ => local_paths(Path::new(source), depth, files)?,
         };
         let unmatched: Vec<String> = alts
             .iter()
@@ -786,7 +908,11 @@ impl Ctx {
             .map(|a| format!("`{a}`"))
             .collect();
         if !unmatched.is_empty() {
-            return Err(format!("no folder matches {}", unmatched.join(", ")));
+            return Err(format!(
+                "no {} matches {}",
+                if files { "file" } else { "folder" },
+                unmatched.join(", ")
+            ));
         }
         let mut selected: Vec<String> = dirs
             .into_iter()
@@ -825,7 +951,7 @@ impl Ctx {
         let is_child = |e: &Entry| e.resolved.starts_with(new_path) && e.resolved != *new_path;
         let mut existing = Vec::new();
         for e in &cfg.entries {
-            let clean = !is_child(e) || Self::clean(e, &install::observe_dest(&e.resolved)?);
+            let clean = !is_child(e) || Self::clean(e, &observe(e)?);
             existing.push((e.name.clone(), e.resolved.clone(), clean));
         }
         let names = match install::plan_nesting(new_path, &existing, force) {
@@ -884,11 +1010,10 @@ impl Ctx {
             .state(&cfg)?
             .iter()
             .any(|e| e.involves(name, self.scope));
-        let dest = install::observe_dest(&entry.resolved)?;
+        let dest = observe(entry)?;
         match install::plan_remove(&dest, Self::clean(entry, &dest), in_error, force) {
             Removal::Refuse(r) => return Err(format!("cannot remove `{name}`: {r}")),
-            Removal::DeleteAndEntry => fs::remove_dir_all(&entry.resolved)
-                .map_err(|e| format!("cannot delete `{}`: {e}", entry.resolved.display()))?,
+            Removal::DeleteAndEntry => delete(entry)?,
             Removal::EntryOnly => {}
         }
         let mut ed = Editor::open(&self.file())?;
@@ -1005,8 +1130,27 @@ impl Ctx {
     }
 }
 
+/// The destination's state, read the way the entry's kind installs it.
+fn observe(e: &Entry) -> Result<Dest, String> {
+    if e.kind.is_file() {
+        install::observe_file_dest(&e.resolved)
+    } else {
+        install::observe_dest(&e.resolved)
+    }
+}
+
+/// Deletes an entry's destination: a file for rules and agents, a folder tree otherwise.
+fn delete(e: &Entry) -> Result<(), String> {
+    let gone = if e.kind.is_file() {
+        fs::remove_file(&e.resolved)
+    } else {
+        fs::remove_dir_all(&e.resolved)
+    };
+    gone.map_err(|err| format!("cannot delete `{}`: {err}", e.resolved.display()))
+}
+
 fn status(e: &Entry) -> &'static str {
-    match install::observe_dest(&e.resolved) {
+    match observe(e) {
         Ok(Dest::Absent) => "missing",
         Ok(Dest::Present { hash }) if e.hash.as_ref().is_none_or(|h| *h == hash) => "present",
         _ => "modified",
@@ -1033,29 +1177,46 @@ fn row(e: &Entry, status: Option<&str>) -> serde_json::Value {
     v
 }
 
-/// Real folders under `root`, as relative paths, at most `depth` components deep. Symlinks are not followed.
-fn local_dirs(root: &Path, depth: usize) -> Result<Vec<String>, String> {
-    fn walk(root: &Path, rel: &str, depth: usize, out: &mut Vec<String>) -> Result<(), String> {
+/// Whether a file name ends in `.md` (case-sensitive), the only kind of file Claude Code loads
+/// as a rule or agent.
+fn is_markdown(name: &str) -> bool {
+    name.ends_with(".md")
+}
+
+/// Real folders (or regular files) under `root`, as relative paths, at most `depth` components
+/// deep. Symlinks are not followed.
+fn local_paths(root: &Path, depth: usize, files: bool) -> Result<Vec<String>, String> {
+    fn walk(
+        root: &Path,
+        rel: &str,
+        depth: usize,
+        files: bool,
+        out: &mut Vec<String>,
+    ) -> Result<(), String> {
         let dir = root.join(rel);
         let rd = fs::read_dir(&dir).map_err(|e| format!("cannot read `{}`: {e}", dir.display()))?;
         for entry in rd.flatten() {
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let child = if rel.is_empty() {
-                    name
-                } else {
-                    format!("{rel}/{name}")
-                };
-                if depth > 1 {
-                    walk(root, &child, depth - 1, out)?;
-                }
+            let Ok(ft) = entry.file_type() else { continue };
+            if !(ft.is_dir() || ft.is_file()) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let child = if rel.is_empty() {
+                name
+            } else {
+                format!("{rel}/{name}")
+            };
+            if ft.is_dir() && depth > 1 {
+                walk(root, &child, depth - 1, files, out)?;
+            }
+            if ft.is_dir() != files {
                 out.push(child);
             }
         }
         Ok(())
     }
     let mut out = Vec::new();
-    walk(root, "", depth, &mut out)?;
+    walk(root, "", depth, files, &mut out)?;
     out.sort();
     Ok(out)
 }

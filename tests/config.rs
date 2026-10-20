@@ -107,9 +107,9 @@ path = "./.custom/bin/linter"
 fn unknown_keys_are_load_errors() {
     let e = local("[skills.x]\ntype = \"local\"\nsource = \"/s\"\ncolour = 1\n").unwrap_err();
     assert!(e.contains("colour") && e.contains("skills"), "{e}");
-    let e = local("[core]\ndefault_agent_path = \"x\"\n").unwrap_err();
+    let e = local("[core]\ndefault_theme_path = \"x\"\n").unwrap_err();
     assert!(
-        e.contains("default_agent_path") && e.contains("core"),
+        e.contains("default_theme_path") && e.contains("core"),
         "{e}"
     );
     let e = global("[themes.x]\n").unwrap_err();

@@ -36,13 +36,24 @@ fn walk(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 
 // @spec INST-HASH-001, INST-HASH-002
 pub fn hash_dir(dir: &Path) -> Result<String, String> {
+    hash_entries(&walk(dir)?)
+}
+
+/// The hash of one file over its kind, executable bit, and bytes; its name is left out so a
+/// staged file and its installed copy hash equal.
+// @spec INST-HASH-003
+pub fn hash_file(file: &Path) -> Result<String, String> {
+    hash_entries(&[(String::new(), file.to_path_buf())])
+}
+
+fn hash_entries(entries: &[(String, PathBuf)]) -> Result<String, String> {
     let mut h = Sha256::new();
-    for (rel, abs) in walk(dir)? {
-        let meta = fs::symlink_metadata(&abs).map_err(|e| e.to_string())?;
+    for (rel, abs) in entries {
+        let meta = fs::symlink_metadata(abs).map_err(|e| e.to_string())?;
         let (kind, body) = if meta.file_type().is_symlink() {
             (
                 b'L',
-                fs::read_link(&abs)
+                fs::read_link(abs)
                     .map_err(|e| e.to_string())?
                     .as_os_str()
                     .as_encoded_bytes()
@@ -56,7 +67,7 @@ pub fn hash_dir(dir: &Path) -> Result<String, String> {
             };
             (
                 exec,
-                fs::read(&abs).map_err(|e| format!("cannot read `{}`: {e}", abs.display()))?,
+                fs::read(abs).map_err(|e| format!("cannot read `{}`: {e}", abs.display()))?,
             )
         };
         for part in [rel.as_bytes(), &[kind], &body] {
@@ -98,8 +109,11 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dest {
     Absent,
-    NotADirectory,
-    Present { hash: String },
+    /// Exists, but is not the shape the entry's kind installs.
+    WrongShape,
+    Present {
+        hash: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -143,7 +157,7 @@ pub fn is_clean(
 ) -> bool {
     match dest {
         Dest::Absent => true,
-        Dest::NotADirectory => false,
+        Dest::WrongShape => false,
         Dest::Present { hash } if *hash == empty_hash() => true,
         Dest::Present { .. } if new_entry => false,
         Dest::Present { hash } => match recorded_hash {
@@ -156,8 +170,8 @@ pub fn is_clean(
 // @spec INST-PLAN-001, INST-PLAN-002, INST-PLAN-003, INST-PLAN-004, INST-PLAN-005, INST-PLAN-007
 pub fn plan(facts: &Facts, force: bool, path: &Path) -> Action {
     match &facts.dest {
-        Dest::NotADirectory => Action::Refuse(format!(
-            "`{}` exists and is not a directory",
+        Dest::WrongShape => Action::Refuse(format!(
+            "`{}` exists and is not the kind of path this entry installs",
             path.display()
         )),
         Dest::Present { hash } if *hash == facts.target_hash => Action::UpToDate {
@@ -209,7 +223,7 @@ pub fn plan_remove(dest: &Dest, clean: bool, in_state_error: bool, force: bool) 
     match dest {
         _ if in_state_error => Removal::EntryOnly,
         Dest::Absent => Removal::EntryOnly,
-        Dest::NotADirectory => Removal::Refuse("destination is not a directory".into()),
+        Dest::WrongShape => Removal::Refuse("destination has the wrong shape".into()),
         Dest::Present { .. } if clean || force => Removal::DeleteAndEntry,
         Dest::Present { .. } => Removal::Refuse(
             "destination has local modifications; use --force to delete them".into(),
@@ -224,7 +238,19 @@ pub fn observe_dest(path: &Path) -> Result<Dest, String> {
         Ok(m) if m.is_dir() => Ok(Dest::Present {
             hash: hash_dir(path)?,
         }),
-        Ok(_) => Ok(Dest::NotADirectory),
+        Ok(_) => Ok(Dest::WrongShape),
+    }
+}
+
+/// Like `observe_dest`, for an entry that installs one file.
+pub fn observe_file_dest(path: &Path) -> Result<Dest, String> {
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Dest::Absent),
+        Err(e) => Err(format!("cannot read `{}`: {e}", path.display())),
+        Ok(m) if m.is_file() => Ok(Dest::Present {
+            hash: hash_file(path)?,
+        }),
+        Ok(_) => Ok(Dest::WrongShape),
     }
 }
 
@@ -240,6 +266,11 @@ pub fn has_files_outside(dir: &Path, excluded: &[PathBuf]) -> Result<bool, Strin
 
 /// `Some(true)` when `path` is inside a git work tree and `git status --porcelain` is empty for it.
 pub fn git_clean(path: &Path) -> Option<bool> {
+    let (dir, target) = if path.is_dir() {
+        (path, Path::new("."))
+    } else {
+        (path.parent()?, Path::new(path.file_name()?))
+    };
     let out = Command::new("git")
         .args([
             "status",
@@ -247,9 +278,9 @@ pub fn git_clean(path: &Path) -> Option<bool> {
             "--ignored",
             "--untracked-files=all",
             "--",
-            ".",
         ])
-        .current_dir(path)
+        .arg(target)
+        .current_dir(dir)
         .output()
         .ok()?;
     out.status.success().then_some(out.stdout.is_empty())
@@ -271,7 +302,7 @@ pub fn staging_dir(dest: &Path) -> PathBuf {
 
 // @spec INST-APPLY-001, INST-APPLY-002
 pub fn install_staged(staging: &Path, dest: &Path) -> Result<(), String> {
-    if !staging.is_dir() {
+    if fs::symlink_metadata(staging).is_err() {
         return Err(format!(
             "staging directory `{}` is missing",
             staging.display()
@@ -288,7 +319,7 @@ pub fn install_staged(staging: &Path, dest: &Path) -> Result<(), String> {
     match result {
         Ok(()) => {
             if had_dest {
-                let _ = fs::remove_dir_all(&backup);
+                remove_any(&backup);
             }
             Ok(())
         }
@@ -296,8 +327,17 @@ pub fn install_staged(staging: &Path, dest: &Path) -> Result<(), String> {
             if had_dest && !dest.exists() {
                 let _ = fs::rename(&backup, dest);
             }
-            let _ = fs::remove_dir_all(staging);
+            remove_any(staging);
             Err(format!("cannot install into `{}`: {e}", dest.display()))
         }
+    }
+}
+
+/// Removes a file, symlink, or directory tree, ignoring failure and absence.
+pub fn remove_any(path: &Path) {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()) {
+        let _ = fs::remove_dir_all(path);
+    } else {
+        let _ = fs::remove_file(path);
     }
 }
