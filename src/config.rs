@@ -60,13 +60,19 @@ pub enum Scope {
 pub enum Kind {
     Skill,
     Plugin,
+    Rule,
+    Agent,
 }
 
 impl Kind {
+    pub const ALL: [Kind; 4] = [Kind::Skill, Kind::Plugin, Kind::Rule, Kind::Agent];
+
     pub fn table(self) -> &'static str {
         match self {
             Kind::Skill => "skills",
             Kind::Plugin => "plugins",
+            Kind::Rule => "rules",
+            Kind::Agent => "agents",
         }
     }
 
@@ -74,7 +80,14 @@ impl Kind {
         match self {
             Kind::Skill => "skill",
             Kind::Plugin => "plugin",
+            Kind::Rule => "rule",
+            Kind::Agent => "agent",
         }
+    }
+
+    /// Rules and agents install one `.md` file; skills and plugins install a folder.
+    pub fn is_file(self) -> bool {
+        matches!(self, Kind::Rule | Kind::Agent)
     }
 }
 
@@ -114,6 +127,8 @@ pub struct Config {
     pub file: PathBuf,
     pub skill_dir: PathBuf,
     pub plugin_dir: PathBuf,
+    pub rule_dir: PathBuf,
+    pub agent_dir: PathBuf,
     pub entries: Vec<Entry>,
 }
 
@@ -144,10 +159,11 @@ impl Config {
             }
             (_, Some(p)) => normalize(&self.dir().join(expand_home(p, &env.home))),
             (Scope::Local, None) => {
-                let base = if kind == Kind::Skill {
-                    &self.skill_dir
-                } else {
-                    &self.plugin_dir
+                let base = match kind {
+                    Kind::Skill => &self.skill_dir,
+                    Kind::Plugin => &self.plugin_dir,
+                    Kind::Rule => &self.rule_dir,
+                    Kind::Agent => &self.agent_dir,
                 };
                 base.join(name.rsplit('/').next().unwrap_or(name))
             }
@@ -287,20 +303,22 @@ const ENTRY_KEYS: [&str; 8] = [
     "type", "source", "commit", "ref", "subpath", "path", "pinned", "hash",
 ];
 
-// @spec CFG-SCHEMA-001, CFG-SCHEMA-002, CFG-SCHEMA-003, CFG-SCHEMA-004, CFG-SCHEMA-005, CFG-SCHEMA-006, CFG-SCHEMA-007, CFG-SCHEMA-009
+// @spec CFG-SCHEMA-001, CFG-SCHEMA-002, CFG-SCHEMA-003, CFG-SCHEMA-004, CFG-SCHEMA-005, CFG-SCHEMA-006, CFG-SCHEMA-007, CFG-SCHEMA-009, CFG-SCHEMA-010
 pub fn parse(text: &str, scope: Scope, file: &Path, env: &Env) -> Result<Config, String> {
     let doc: DocumentMut = text
         .parse()
         .map_err(|e| format!("invalid TOML in `{}`: {e}", file.display()))?;
     let dir = file.parent().unwrap_or(Path::new("/"));
-    let mut core = (
+    let mut core = [
         String::from("./.agents/skills"),
         String::from("./.agents/plugins"),
-    );
+        String::from("./.claude/rules"),
+        String::from("./.claude/agents"),
+    ];
 
     for (key, item) in doc.iter() {
         match key {
-            "skills" | "plugins" => {}
+            "skills" | "plugins" | "rules" | "agents" => {}
             "core" if scope == Scope::Global => {
                 return Err(format!(
                     "`[core]` is local-only; remove it from `{}`",
@@ -311,8 +329,10 @@ pub fn parse(text: &str, scope: Scope, file: &Path, env: &Env) -> Result<Config,
                 let table = item.as_table_like().ok_or("`core` must be a table")?;
                 for (k, v) in table.iter() {
                     let slot = match k {
-                        "default_skill_path" => &mut core.0,
-                        "default_plugin_path" => &mut core.1,
+                        "default_skill_path" => &mut core[0],
+                        "default_plugin_path" => &mut core[1],
+                        "default_rule_path" => &mut core[2],
+                        "default_agent_path" => &mut core[3],
                         _ => {
                             return Err(format!(
                                 "unknown key `{k}` in [core] of `{}`",
@@ -333,12 +353,14 @@ pub fn parse(text: &str, scope: Scope, file: &Path, env: &Env) -> Result<Config,
     let mut config = Config {
         scope,
         file: file.to_path_buf(),
-        skill_dir: base(&core.0),
-        plugin_dir: base(&core.1),
+        skill_dir: base(&core[0]),
+        plugin_dir: base(&core[1]),
+        rule_dir: base(&core[2]),
+        agent_dir: base(&core[3]),
         entries: Vec::new(),
     };
 
-    for kind in [Kind::Skill, Kind::Plugin] {
+    for kind in Kind::ALL {
         let Some(item) = doc.get(kind.table()) else {
             continue;
         };
@@ -351,7 +373,7 @@ pub fn parse(text: &str, scope: Scope, file: &Path, env: &Env) -> Result<Config,
                 .ok_or_else(|| format!("`{}.{name}` must be a table", kind.table()))?;
             if config.get(name).is_some() {
                 return Err(format!(
-                    "`{name}` appears under both [skills] and [plugins] in `{}`",
+                    "`{name}` appears under more than one of [skills], [plugins], [rules], and [agents] in `{}`",
                     file.display()
                 ));
             }
@@ -412,6 +434,13 @@ fn parse_entry(
             .as_bool()
             .ok_or_else(|| format!("`pinned` in {at} must be true or false"))?,
     };
+    let subpath = string("subpath")?;
+    if kind.is_file() && source_type == SourceType::Remote && subpath.is_none() {
+        return Err(format!(
+            "remote {} `{name}` needs a `subpath` naming its file",
+            kind.label()
+        ));
+    }
     let path = string("path")?;
     let resolved = config.resolve_path(kind, name, path.as_deref(), env)?;
     Ok(Entry {
@@ -421,7 +450,7 @@ fn parse_entry(
         source,
         commit,
         git_ref,
-        subpath: string("subpath")?,
+        subpath,
         path,
         pinned,
         hash: string("hash")?,

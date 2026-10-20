@@ -135,14 +135,22 @@ impl Cache {
         Ok(dirs)
     }
 
-    // @spec CACHE-EXP-001, CACHE-EXP-002
-    pub fn export(
-        &self,
-        url: &str,
-        sha: &str,
-        subpath: Option<&str>,
-        staging: &Path,
-    ) -> Result<(), String> {
+    /// Every regular file in the commit's tree, sorted; symlinks and submodules are left out.
+    // @spec CACHE-LIST-002
+    pub fn list_files(&self, url: &str, sha: &str) -> Result<Vec<String>, String> {
+        let dir = self.repo(url)?;
+        let out = git(Some(&dir), &["ls-tree", "-r", "-z", sha])?;
+        let mut files: Vec<String> = out
+            .split('\0')
+            .filter_map(|rec| rec.split_once('\t'))
+            .filter(|(meta, _)| matches!(meta.split(' ').next(), Some("100644" | "100755")))
+            .map(|(_, path)| path.to_string())
+            .collect();
+        files.sort();
+        Ok(files)
+    }
+
+    fn checkout(&self, url: &str, sha: &str) -> Result<PathBuf, String> {
         let dir = self.repo(url)?;
         git(
             Some(&dir),
@@ -156,6 +164,41 @@ impl Cache {
                 sha,
             ],
         )?;
+        Ok(dir)
+    }
+
+    /// Copies the one regular file at `subpath` to `staging`, keeping its executable bit.
+    // @spec CACHE-EXP-003, CACHE-EXP-004
+    pub fn export_file(
+        &self,
+        url: &str,
+        sha: &str,
+        subpath: &str,
+        staging: &Path,
+    ) -> Result<(), String> {
+        let src = self.checkout(url, sha)?.join(subpath);
+        match fs::symlink_metadata(&src) {
+            Err(_) => Err(format!(
+                "subpath `{subpath}` does not exist at commit `{sha}`"
+            )),
+            Ok(m) if !m.is_file() => Err(format!(
+                "subpath `{subpath}` at commit `{sha}` is not a regular file"
+            )),
+            Ok(_) => fs::copy(&src, staging)
+                .map(|_| ())
+                .map_err(|e| format!("cannot copy `{}`: {e}", src.display())),
+        }
+    }
+
+    // @spec CACHE-EXP-001, CACHE-EXP-002
+    pub fn export(
+        &self,
+        url: &str,
+        sha: &str,
+        subpath: Option<&str>,
+        staging: &Path,
+    ) -> Result<(), String> {
+        let dir = self.checkout(url, sha)?;
         let src = dir.join(subpath.unwrap_or(""));
         if let Some(s) = subpath {
             if !src.exists() {

@@ -216,7 +216,7 @@ fn dirty_destination_needs_force() {
 // @spec INST-PLAN-005
 #[test]
 fn non_directory_destination_is_always_refused() {
-    let f = facts(Dest::NotADirectory, None, None);
+    let f = facts(Dest::WrongShape, None, None);
     assert!(matches!(
         install::plan(&f, false, Path::new(P)),
         Action::Refuse(_)
@@ -325,7 +325,7 @@ fn observes_destinations() {
     write(&tmp.path().join("file"), "x");
     assert_eq!(
         install::observe_dest(&tmp.path().join("file")).unwrap(),
-        Dest::NotADirectory
+        Dest::WrongShape
     );
     let d = tree(&tmp.path().join("d"), &[("a", "1")]);
     assert_eq!(
